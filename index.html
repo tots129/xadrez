@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Xadrez</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main>
+    <header class="topo">
+      <h1><span class="logo">♞</span> Xadrez</h1>
+      <p class="sub">Jogue contra o bot, com um amigo ou online</p>
+    </header>
+
+    <!-- MENU -->
+    <section id="menu" class="painel">
+      <div class="modos">
+        <button class="modo" data-modo="bot">
+          <span class="ico">🤖</span>
+          <strong>Contra o bot</strong>
+          <small>Escolha o nível</small>
+        </button>
+        <button class="modo" data-modo="local">
+          <span class="ico">👥</span>
+          <strong>Local</strong>
+          <small>2 pessoas, mesmo PC</small>
+        </button>
+        <button class="modo" data-modo="online">
+          <span class="ico">🌐</span>
+          <strong>Online</strong>
+          <small>Jogue com um amigo</small>
+        </button>
+      </div>
+
+      <div id="opcoes-bot" class="opcoes" hidden>
+        <label>Você joga de
+          <select id="cor-bot">
+            <option value="w">Brancas</option>
+            <option value="b">Pretas</option>
+          </select>
+        </label>
+        <label>Nível do bot
+          <select id="nivel-bot">
+            <option value="1">Fácil (jogadas aleatórias)</option>
+            <option value="2" selected>Médio</option>
+            <option value="3">Difícil</option>
+          </select>
+        </label>
+        <button id="btn-iniciar-bot" class="destaque">Começar</button>
+      </div>
+
+      <div id="opcoes-online" class="opcoes" hidden>
+        <button id="btn-criar" class="destaque">Criar sala</button>
+        <span class="ou">ou</span>
+        <input id="codigo" placeholder="CÓDIGO" maxlength="4" autocomplete="off" />
+        <button id="btn-entrar">Entrar</button>
+      </div>
+    </section>
+
+    <!-- JOGO -->
+    <section id="jogo" hidden>
+      <div id="status"></div>
+      <div id="info"></div>
+
+      <div class="jogador" id="jog-topo">
+        <span class="cor-ic"></span><span class="nome"></span>
+        <span class="capturadas"></span><span class="vantagem"></span>
+      </div>
+
+      <div id="tabuleiro"></div>
+
+      <div class="jogador" id="jog-base">
+        <span class="cor-ic"></span><span class="nome"></span>
+        <span class="capturadas"></span><span class="vantagem"></span>
+      </div>
+
+      <div class="controles">
+        <button id="btn-novo">↻ Novo jogo</button>
+        <button id="btn-desfazer">↶ Desfazer</button>
+        <button id="btn-girar">⇅ Girar tabuleiro</button>
+        <button id="btn-auto">🔄 Giro automático: ligado</button>
+        <button id="btn-empate">🤝 Propor empate</button>
+        <button id="btn-desistir">🏳️ Desistir</button>
+        <button id="btn-menu">☰ Menu</button>
+      </div>
+
+      <div id="historico" hidden></div>
+    </section>
+  </main>
+
+  <!-- Escolha da peça na promoção do peão -->
+  <div id="promocao" class="overlay" hidden>
+    <div class="caixa">
+      <p>Promover o peão para:</p>
+      <div id="promo-opcoes"></div>
+    </div>
+  </div>
+
+  <!-- Perguntas (desistir, aceitar empate) -->
+  <div id="dialogo" class="overlay" hidden>
+    <div class="caixa">
+      <p id="dialogo-texto"></p>
+      <div class="dialogo-botoes">
+        <button id="dialogo-nao"></button>
+        <button id="dialogo-sim" class="destaque"></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="aviso" hidden></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

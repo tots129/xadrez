@@ -447,6 +447,27 @@ button.conta-btn { padding: 6px 12px; font-size: 14px; font-weight: 600; max-wid
   .stats { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* ---------- Painel do admin ---------- */
+.admin-caixa { width: min(96vw, 1100px); height: min(90vh, 800px); display: flex; flex-direction: column; text-align: left; padding: 16px; }
+.admin-topo { display: flex; align-items: center; gap: 8px; }
+.admin-topo p { flex: 1; margin: 0 !important; }
+.admin-abas { flex-wrap: wrap; margin: 12px 0; }
+.aba-admin { flex: 1; background: transparent; white-space: nowrap; }
+.aba-admin.ativa { background: var(--card2); border-color: var(--verde); font-weight: 700; }
+.admin-conteudo { flex: 1; overflow: auto; }
+.admin-stats { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.admin-busca { width: 100%; margin-bottom: 10px; color: var(--texto); }
+.admin-tabela { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-tabela th { position: sticky; top: 0; background: var(--card); color: var(--suave); font-weight: 400; text-align: left; }
+.admin-tabela th, .admin-tabela td { padding: 7px 8px; border-bottom: 1px solid var(--borda); white-space: nowrap; }
+.admin-tabela tr:hover td { background: rgba(255, 255, 255, 0.03); }
+.admin-tabela .acoes { display: flex; gap: 4px; }
+.admin-tabela .acoes button { padding: 4px 8px; font-size: 12px; }
+button.perigo { background: #5a2626; border-color: #8a3a3a; }
+button.perigo:hover { background: #7a3030; }
+.aviso-email { margin: 8px 0; padding: 10px; border-radius: 10px; background: #3b3320; border: 1px solid #d4a93a; }
+.aviso-email .nota { width: 100%; }
+
 /* ---------- Confete e conexão ---------- */
 .confete { position: fixed; inset: 0; pointer-events: none; z-index: 200; }
 #conexao {

@@ -28,6 +28,7 @@
         <button id="btn-som" class="icone" title="Desligar sons">🔊</button>
         <button id="btn-ranking" class="icone" title="Ranking">🏆</button>
         <button id="btn-conta" class="conta-btn" hidden>👤 Entrar</button>
+        <button id="btn-admin" class="conta-btn" hidden>🛠️ Admin</button>
       </div>
     </header>
 
@@ -218,8 +219,11 @@
         <button type="button" class="aba ativa" data-aba="entrar">Entrar</button>
         <button type="button" class="aba" data-aba="cadastrar">Criar conta</button>
       </div>
-      <label>Nome de usuário
-        <input id="login-nome" name="username" maxlength="16" autocomplete="username" required />
+      <label>E-mail
+        <input id="login-email" name="email" type="text" inputmode="email" maxlength="254" autocomplete="username" required />
+      </label>
+      <label id="login-nome-label" hidden>Apelido (aparece para os outros jogadores)
+        <input id="login-nome" name="nickname" maxlength="16" autocomplete="nickname" />
       </label>
       <label>Senha
         <input id="login-senha" name="password" type="password" maxlength="100" autocomplete="current-password" required />
@@ -227,7 +231,7 @@
       <label id="login-confirmar-label" hidden>Confirmar senha
         <input id="login-confirmar" type="password" maxlength="100" autocomplete="new-password" />
       </label>
-      <small id="login-dica" class="nota" hidden>3 a 16 caracteres: letras, números ou _. Senha com pelo menos 6 caracteres.</small>
+      <small id="login-dica" class="nota" hidden>Apelido: 3 a 16 caracteres (letras, números ou _). Senha com pelo menos 6 caracteres.</small>
       <p id="login-erro" class="erro" hidden></p>
       <div class="dialogo-botoes">
         <button type="button" id="login-fechar">Cancelar</button>
@@ -239,7 +243,12 @@
   <!-- Minha conta -->
   <div id="perfil" class="overlay" hidden>
     <div class="caixa perfil-caixa">
-      <p>👤 <span id="perfil-nome"></span></p>
+      <p>👤 <span id="perfil-nome"></span> <small id="perfil-email" class="nota"></small></p>
+      <form id="email-form" class="linha aviso-email" hidden>
+        <span class="nota">Sua conta ainda não tem e-mail. Adicione para poder entrar com ele:</span>
+        <input id="email-novo" type="text" inputmode="email" maxlength="254" placeholder="seu@email.com" autocomplete="email" />
+        <button type="submit" class="destaque">Salvar</button>
+      </form>
       <div class="stats">
         <div><b id="st-elo"></b><small>pontos online</small></div>
         <div><b id="st-online"></b><small>online (V/E/D)</small></div>
@@ -272,6 +281,25 @@
         <button id="btn-sair-conta">Sair da conta</button>
         <button id="perfil-fechar" class="destaque">Fechar</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Painel do administrador -->
+  <div id="admin" class="overlay" hidden>
+    <div class="caixa admin-caixa">
+      <div class="admin-topo">
+        <p>🛠️ Painel do administrador</p>
+        <button id="admin-atualizar" title="Atualizar">↻</button>
+        <button id="admin-fechar" class="destaque">Fechar</button>
+      </div>
+      <div class="abas admin-abas">
+        <button type="button" class="aba-admin ativa" data-aba="resumo">📊 Resumo</button>
+        <button type="button" class="aba-admin" data-aba="contas">👥 Contas</button>
+        <button type="button" class="aba-admin" data-aba="logins">🔐 Logins</button>
+        <button type="button" class="aba-admin" data-aba="salas">♟️ Salas</button>
+        <button type="button" class="aba-admin" data-aba="partidas">📜 Partidas</button>
+      </div>
+      <div id="admin-conteudo" class="admin-conteudo"></div>
     </div>
   </div>
 

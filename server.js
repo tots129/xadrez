@@ -40,7 +40,28 @@ function presenca(usuarioId) {
 const avisar = (usuarioId, evento, dados) => io.to(`u:${usuarioId}`).emit(evento, dados);
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.use('/api', rotasDeContas({ presenca, avisar }));
+// Para o painel do admin: quem está online e quais salas existem agora
+function painel() {
+  const listaSalas = [];
+  for (const [codigo, sala] of salas) {
+    const jog = (c) => sala.jogadores[c] ? { nome: sala.jogadores[c].nome, conta: !!sala.jogadores[c].usuarioId, conectado: sala.jogadores[c].conectado } : null;
+    listaSalas.push({
+      codigo,
+      brancas: jog('w'),
+      pretas: jog('b'),
+      estado: !sala.iniciada ? 'esperando' : sala.encerrada ? 'terminada' : 'jogando',
+      lances: sala.chess.history().length,
+      relogio: sala.base ? `${sala.base / 60000} min` : 'sem relógio',
+    });
+  }
+  return { usuarios_online: abasDoUsuario.size, conexoes: io.engine.clientsCount, salas: listaSalas };
+}
+
+function desconectar(usuarioId) {
+  io.in(`u:${usuarioId}`).disconnectSockets(true);
+}
+
+app.use('/api', rotasDeContas({ presenca, avisar, painel, desconectar }));
 app.get('/:arquivo', (req, res, next) => {
   if (ARQUIVOS_PUBLICOS.includes(req.params.arquivo)) {
     return res.sendFile(path.join(__dirname, req.params.arquivo));

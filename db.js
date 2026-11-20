@@ -50,6 +50,20 @@ const ESQUEMA = [
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS usuarios_nome_idx ON usuarios (lower(nome))`,
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email TEXT`,
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_login TIMESTAMPTZ`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS usuarios_email_idx ON usuarios (lower(email))`,
+  `CREATE TABLE IF NOT EXISTS logins (
+    id SERIAL PRIMARY KEY,
+    usuario_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
+    email TEXT,
+    sucesso BOOLEAN NOT NULL,
+    tipo TEXT NOT NULL,
+    ip TEXT,
+    navegador TEXT,
+    quando TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
   `CREATE TABLE IF NOT EXISTS sessoes (
     token TEXT PRIMARY KEY,
     usuario_id INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
@@ -79,5 +93,6 @@ export async function prepararBanco() {
   if (!executar) return;
   for (const comando of ESQUEMA) await q(comando);
   await q('DELETE FROM sessoes WHERE expira_em < now()');
+  await q("DELETE FROM logins WHERE quando < now() - interval '90 days'"); // guarda só 90 dias
   console.log(`Banco de dados pronto (${tipoBanco}).`);
 }

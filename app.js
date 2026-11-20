@@ -1455,6 +1455,7 @@ function renovarConexao() {
 async function aplicarConta(usuario) {
   conta = usuario;
   $('btn-conta').textContent = conta ? `👤 ${conta.nome}` : '👤 Entrar';
+  $('btn-admin').hidden = !conta?.admin;
   $('apelido').disabled = !!conta;
   $('apelido').parentElement.title = conta ? 'Seu nome é o da sua conta' : '';
   if (!conta) return;
@@ -1488,6 +1489,9 @@ function trocarAbaLogin(aba) {
   abaLogin = aba;
   document.querySelectorAll('.aba').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === aba));
   const cadastro = aba === 'cadastrar';
+  $('login-nome-label').hidden = !cadastro;
+  $('login-nome').required = cadastro;
+  $('login-email').autocomplete = cadastro ? 'email' : 'username';
   $('login-confirmar-label').hidden = !cadastro;
   $('login-dica').hidden = !cadastro;
   $('login-senha').autocomplete = cadastro ? 'new-password' : 'current-password';
@@ -1501,12 +1505,13 @@ $('btn-conta').onclick = () => {
   trocarAbaLogin('entrar');
   $('login-form').reset();
   $('login').hidden = false;
-  $('login-nome').focus();
+  $('login-email').focus();
 };
 $('login-fechar').onclick = () => ($('login').hidden = true);
 
 $('login-form').onsubmit = async (e) => {
   e.preventDefault();
+  const email = $('login-email').value.trim();
   const nome = $('login-nome').value.trim();
   const senha = $('login-senha').value;
   const erro = (t) => {
@@ -1516,7 +1521,9 @@ $('login-form').onsubmit = async (e) => {
   if (abaLogin === 'cadastrar' && senha !== $('login-confirmar').value) return erro('As senhas não são iguais.');
   $('login-enviar').disabled = true;
   try {
-    const r = await api(abaLogin === 'cadastrar' ? '/cadastrar' : '/entrar', { nome, senha });
+    const r = abaLogin === 'cadastrar'
+      ? await api('/cadastrar', { email, nome, senha })
+      : await api('/entrar', { email, senha });
     $('login').hidden = true;
     $('login-form').reset();
     await aplicarConta(r.usuario);
@@ -1540,6 +1547,8 @@ async function abrirPerfil() {
     return aplicarConta(null);
   }
   $('perfil-nome').textContent = conta.nome;
+  $('perfil-email').textContent = conta.email || '';
+  $('email-form').hidden = !!conta.email;
   $('st-elo').textContent = conta.elo;
   $('st-online').textContent = `${conta.vitorias}/${conta.empates}/${conta.derrotas}`;
   $('st-bot').textContent = `${conta.bot_vitorias}/${conta.bot_empates}/${conta.bot_derrotas}`;
@@ -1687,6 +1696,179 @@ $('amigo-form').onsubmit = async (e) => {
   }
   carregarAmigos();
 };
+
+$('email-form').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    conta = (await api('/email', { email: $('email-novo').value.trim() })).usuario;
+    await aplicarConta(conta);
+    avisar('E-mail salvo! Agora você entra com ele. ✉️');
+    abrirPerfil();
+  } catch (err) {
+    avisar(err.message);
+  }
+};
+
+/* ---------- Painel do administrador ---------- */
+let abaAdmin = 'resumo';
+const dataHora = (d) => (d ? new Date(d).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+
+// Monta uma tabela com segurança (textContent, nunca HTML vindo do banco)
+function tabela(colunas, linhas) {
+  const t = document.createElement('table');
+  t.className = 'admin-tabela';
+  const cab = t.createTHead().insertRow();
+  for (const c of colunas) {
+    const th = document.createElement('th');
+    th.textContent = c;
+    cab.appendChild(th);
+  }
+  const corpo = t.createTBody();
+  for (const celulas of linhas) {
+    const tr = corpo.insertRow();
+    for (const valor of celulas) {
+      const td = tr.insertCell();
+      if (valor instanceof Node) td.appendChild(valor);
+      else td.textContent = valor ?? '—';
+    }
+  }
+  if (!linhas.length) {
+    const td = corpo.insertRow().insertCell();
+    td.colSpan = colunas.length;
+    td.textContent = 'Nada por aqui ainda.';
+  }
+  return t;
+}
+
+function botaoAdmin(texto, acao, classe = '') {
+  const b = document.createElement('button');
+  b.textContent = texto;
+  b.className = classe;
+  b.onclick = acao;
+  return b;
+}
+
+async function acaoAdmin(caminho, corpo, confirmacao) {
+  $('admin').hidden = true;
+  const ok = confirmacao ? await perguntar(confirmacao, 'Confirmar', 'Cancelar') : true;
+  $('admin').hidden = false;
+  if (!ok) return;
+  try {
+    const r = await api(caminho, corpo);
+    avisar(r.texto || 'Feito!');
+  } catch (err) {
+    avisar(err.message);
+  }
+  carregarAdmin();
+}
+
+async function carregarAdmin() {
+  const el = $('admin-conteudo');
+  document.querySelectorAll('.aba-admin').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === abaAdmin));
+  el.textContent = 'Carregando...';
+  try {
+    if (abaAdmin === 'resumo') {
+      const r = await api('/admin/resumo');
+      el.innerHTML = '';
+      const grade = document.createElement('div');
+      grade.className = 'stats admin-stats';
+      const itens = [
+        [r.contas, 'contas'], [r.contas_hoje, 'contas novas (24h)'], [r.usuarios_online, 'contas online agora'],
+        [r.conexoes, 'pessoas no site agora'], [r.logins_hoje, 'logins (24h)'], [r.falhas_hoje, 'logins errados (24h)'],
+        [r.salas.filter((s) => s.estado === 'jogando').length, 'partidas acontecendo'], [r.partidas_hoje, 'partidas (24h)'],
+        [r.partidas_total, 'partidas no total'], [r.bloqueadas, 'contas bloqueadas'],
+      ];
+      for (const [n, rotulo] of itens) {
+        const d = document.createElement('div');
+        const b = document.createElement('b');
+        b.textContent = n;
+        const s = document.createElement('small');
+        s.textContent = rotulo;
+        d.append(b, s);
+        grade.appendChild(d);
+      }
+      el.appendChild(grade);
+    } else if (abaAdmin === 'contas') {
+      el.innerHTML = '';
+      const busca = document.createElement('input');
+      busca.placeholder = 'Buscar por apelido ou e-mail...';
+      busca.className = 'admin-busca';
+      busca.value = carregarAdmin.busca || '';
+      busca.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+          carregarAdmin.busca = busca.value;
+          carregarAdmin();
+        }
+      };
+      el.appendChild(busca);
+      const lista = await api('/admin/usuarios?busca=' + encodeURIComponent(carregarAdmin.busca || ''));
+      el.appendChild(tabela(
+        ['Apelido', 'E-mail', 'Status', 'Pontos', 'Online V/E/D', 'Bot V/E/D', 'Probl.', 'Amigos', 'Criada', 'Último login', 'Ações'],
+        lista.map((u) => {
+          const acoes = document.createElement('div');
+          acoes.className = 'acoes';
+          if (!u.admin) {
+            acoes.append(
+              botaoAdmin(u.bloqueado ? 'Desbloquear' : 'Bloquear', () =>
+                acaoAdmin('/admin/bloquear', { id: u.id, bloquear: !u.bloqueado }, u.bloqueado ? null : `Bloquear ${u.nome}? A pessoa sai na hora e não consegue mais entrar.`)),
+              botaoAdmin('Nova senha', async () => {
+                $('admin').hidden = true;
+                const nova = prompt(`Nova senha para ${u.nome} (mínimo 6 caracteres):`);
+                $('admin').hidden = false;
+                if (nova) acaoAdmin('/admin/senha', { id: u.id, nova });
+              }),
+              botaoAdmin('Excluir', () =>
+                acaoAdmin('/admin/excluir', { id: u.id }, `Excluir a conta de ${u.nome} para sempre? Isso não pode ser desfeito.`), 'perigo'),
+            );
+          } else {
+            acoes.textContent = '👑 admin';
+          }
+          const status = u.bloqueado ? '⛔ bloqueada' : u.jogando ? '🟡 jogando' : u.online ? '🟢 online' : '⚪ offline';
+          return [u.nome, u.email, status, u.elo, `${u.vitorias}/${u.empates}/${u.derrotas}`,
+            `${u.bot_vitorias}/${u.bot_empates}/${u.bot_derrotas}`, u.problemas, u.amigos, dataHora(u.criado_em), dataHora(u.ultimo_login), acoes];
+        })
+      ));
+    } else if (abaAdmin === 'logins') {
+      const lista = await api('/admin/logins');
+      const TIPOS = { login: 'login', cadastro: 'criou conta', 'senha-errada': 'senha errada', 'conta-bloqueada': 'conta bloqueada', 'bloqueado-tentativas': 'muitas tentativas' };
+      el.innerHTML = '';
+      el.appendChild(tabela(
+        ['Quando', 'Resultado', 'Conta', 'E-mail digitado', 'IP', 'Navegador'],
+        lista.map((l) => [dataHora(l.quando), (l.sucesso ? '✅ ' : '❌ ') + (TIPOS[l.tipo] || l.tipo), l.nome, l.email, l.ip, l.navegador])
+      ));
+    } else if (abaAdmin === 'salas') {
+      const lista = await api('/admin/salas');
+      const nomeJ = (j) => (j ? `${j.nome}${j.conta ? '' : ' (convidado)'}${j.conectado ? '' : ' ⚠️'}` : '—');
+      const ESTADOS = { esperando: '⏳ esperando', jogando: '♟️ jogando', terminada: '🏁 terminada' };
+      el.innerHTML = '';
+      el.appendChild(tabela(
+        ['Código', 'Estado', 'Brancas', 'Pretas', 'Lances', 'Relógio'],
+        lista.map((s) => [s.codigo, ESTADOS[s.estado], nomeJ(s.brancas), nomeJ(s.pretas), s.lances, s.relogio])
+      ));
+    } else if (abaAdmin === 'partidas') {
+      const lista = await api('/admin/partidas');
+      el.innerHTML = '';
+      el.appendChild(tabela(
+        ['Quando', 'Brancas', 'Pretas', 'Resultado', 'Motivo', 'Lances'],
+        lista.map((p) => [dataHora(p.criado_em), p.branco_nome, p.preto_nome,
+          p.vencedor === 'w' ? 'Brancas venceram' : p.vencedor === 'b' ? 'Pretas venceram' : 'Empate', MOTIVOS[p.motivo] || p.motivo, p.lances])
+      ));
+    }
+  } catch (err) {
+    el.textContent = err.message;
+  }
+}
+
+document.querySelectorAll('.aba-admin').forEach((b) => (b.onclick = () => {
+  abaAdmin = b.dataset.aba;
+  carregarAdmin();
+}));
+$('btn-admin').onclick = () => {
+  $('admin').hidden = false;
+  carregarAdmin();
+};
+$('admin-fechar').onclick = () => ($('admin').hidden = true);
+$('admin-atualizar').onclick = carregarAdmin;
 
 // Na sala de espera: botões para chamar amigos online
 async function mostrarAmigosParaConvidar() {

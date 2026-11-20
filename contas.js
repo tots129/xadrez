@@ -6,6 +6,30 @@ import { q, bancoAtivo } from './db.js';
 const COOKIE = 'xadrez_sessao';
 const DURACAO_SESSAO_DIAS = 30;
 const NOME_VALIDO = /^[A-Za-z0-9_]{3,16}$/;
+const EMAIL_VALIDO = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
+
+// O e-mail do administrador fica na variável ADMIN_EMAIL do Render (não no código, que é público)
+const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+export const ehAdmin = (email) => !!ADMIN_EMAIL && String(email || '').toLowerCase() === ADMIN_EMAIL;
+
+// "Mozilla/5.0 (Windows NT 10.0...) Chrome/..." -> "Chrome · Windows"
+function resumoNavegador(ua = '') {
+  const nav = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Chrome\//.test(ua) ? 'Chrome'
+    : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Outro';
+  const so = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iPhone/iPad' : /Windows/.test(ua) ? 'Windows'
+    : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '?';
+  return `${nav} · ${so}`;
+}
+
+async function registrarLogin(req, { usuarioId = null, email, sucesso, tipo }) {
+  try {
+    await q('INSERT INTO logins (usuario_id, email, sucesso, tipo, ip, navegador) VALUES ($1, $2, $3, $4, $5, $6)', [
+      usuarioId, String(email || '').slice(0, 200), sucesso, tipo, String(req.ip || '').slice(0, 64), resumoNavegador(req.get('user-agent')),
+    ]);
+  } catch (e) {
+    console.error('Erro ao registrar login:', e.message);
+  }
+}
 
 /* ---------- Senhas (scrypt, embutido no Node) ---------- */
 function gerarHash(senha) {
@@ -42,11 +66,12 @@ export function lerCookie(cabecalho, nome = COOKIE) {
 export async function usuarioDaSessao(token) {
   if (!token || !bancoAtivo()) return null;
   const rows = await q(
-    `SELECT u.id, u.nome FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
-     WHERE s.token = $1 AND s.expira_em > now()`,
+    `SELECT u.id, u.nome, u.email FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
+     WHERE s.token = $1 AND s.expira_em > now() AND NOT u.bloqueado`,
     [token]
   );
-  return rows[0] || null;
+  const u = rows[0];
+  return u ? { ...u, admin: ehAdmin(u.email) } : null;
 }
 
 async function criarSessao(res, req, usuarioId) {
@@ -80,12 +105,12 @@ setInterval(() => {
 /* ---------- Perfil ---------- */
 async function perfil(id) {
   const [u] = await q(
-    `SELECT id, nome, round(elo)::int AS elo, vitorias, derrotas, empates,
+    `SELECT id, nome, email, round(elo)::int AS elo, vitorias, derrotas, empates,
             bot_vitorias, bot_derrotas, bot_empates, problemas, tema
      FROM usuarios WHERE id = $1`,
     [id]
   );
-  return u || null;
+  return u ? { ...u, admin: ehAdmin(u.email) } : null;
 }
 
 /* ---------- Ranking e partidas online (chamado pelo servidor do jogo) ---------- */
@@ -121,7 +146,8 @@ export async function saoAmigos(a, b) {
 
 /* ---------- Rotas ---------- */
 // presenca(id) -> { online, jogando }; avisar(id, evento) -> manda um evento para as abas do usuário
-export function rotasDeContas({ presenca, avisar }) {
+// painel() -> números e salas ao vivo; desconectar(id) -> derruba as conexões de um usuário
+export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
   const r = express.Router();
   r.use(express.json({ limit: '20kb' }));
 
@@ -160,44 +186,75 @@ export function rotasDeContas({ presenca, avisar }) {
   });
 
   r.post('/cadastrar', async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
     const nome = String(req.body?.nome || '').trim();
     const senha = String(req.body?.senha || '');
-    if (!NOME_VALIDO.test(nome)) return res.status(400).json({ erro: 'O nome deve ter de 3 a 16 caracteres: letras, números ou _ (sem espaços nem acentos).' });
+    if (!EMAIL_VALIDO.test(email) || email.length > 254) return res.status(400).json({ erro: 'Digite um e-mail válido.' });
+    if (!NOME_VALIDO.test(nome)) return res.status(400).json({ erro: 'O apelido deve ter de 3 a 16 caracteres: letras, números ou _ (sem espaços nem acentos).' });
     if (senha.length < 6 || senha.length > 100) return res.status(400).json({ erro: 'A senha deve ter pelo menos 6 caracteres.' });
     const ip = req.ip;
     if (bloqueado('cad:' + ip)) return res.status(429).json({ erro: 'Muitas contas criadas. Tente mais tarde.' });
-    const existe = await q('SELECT 1 FROM usuarios WHERE lower(nome) = lower($1)', [nome]);
-    if (existe.length) return res.status(409).json({ erro: 'Esse nome já está em uso. Escolha outro.' });
+    const emailUsado = await q('SELECT 1 FROM usuarios WHERE lower(email) = $1', [email]);
+    if (emailUsado.length) return res.status(409).json({ erro: 'Já existe uma conta com esse e-mail. Tente entrar.' });
+    const nomeUsado = await q('SELECT 1 FROM usuarios WHERE lower(nome) = lower($1)', [nome]);
+    if (nomeUsado.length) return res.status(409).json({ erro: 'Esse apelido já está em uso. Escolha outro.' });
     const hash = await gerarHash(senha);
     let novo;
     try {
-      [novo] = await q('INSERT INTO usuarios (nome, senha_hash) VALUES ($1, $2) RETURNING id', [nome, hash]);
+      [novo] = await q('INSERT INTO usuarios (nome, email, senha_hash, ultimo_login) VALUES ($1, $2, $3, now()) RETURNING id', [nome, email, hash]);
     } catch {
-      return res.status(409).json({ erro: 'Esse nome já está em uso. Escolha outro.' });
+      return res.status(409).json({ erro: 'Esse e-mail ou apelido já está em uso.' });
     }
     registrarFalha('cad:' + ip); // conta como "tentativa" para limitar criação em massa
+    await registrarLogin(req, { usuarioId: novo.id, email, sucesso: true, tipo: 'cadastro' });
     await criarSessao(res, req, novo.id);
     res.json({ usuario: await perfil(novo.id) });
   });
 
+  // Entra com o e-mail (contas antigas, sem e-mail, ainda podem usar o apelido)
   r.post('/entrar', async (req, res) => {
-    const nome = String(req.body?.nome || '').trim();
+    const login = String(req.body?.email || req.body?.nome || '').trim().toLowerCase();
     const senha = String(req.body?.senha || '');
     const chave = 'login:' + req.ip;
-    const chaveNome = 'nome:' + nome.toLowerCase();
-    if (bloqueado(chave) || bloqueado(chaveNome)) {
+    const chaveConta = 'conta:' + login;
+    if (bloqueado(chave) || bloqueado(chaveConta)) {
+      await registrarLogin(req, { email: login, sucesso: false, tipo: 'bloqueado-tentativas' });
       return res.status(429).json({ erro: 'Muitas tentativas erradas. Espere 15 minutos e tente de novo.' });
     }
-    const [u] = await q('SELECT id, senha_hash FROM usuarios WHERE lower(nome) = lower($1)', [nome]);
+    const [u] = await q(
+      'SELECT id, senha_hash, bloqueado FROM usuarios WHERE lower(email) = $1 OR (email IS NULL AND lower(nome) = $1)',
+      [login]
+    );
     const ok = u ? await conferirSenha(senha, u.senha_hash) : await conferirSenha(senha, 'scrypt$00$00');
     if (!u || !ok) {
       registrarFalha(chave);
-      registrarFalha(chaveNome);
-      return res.status(401).json({ erro: 'Nome ou senha incorretos.' });
+      registrarFalha(chaveConta);
+      await registrarLogin(req, { usuarioId: u?.id, email: login, sucesso: false, tipo: 'senha-errada' });
+      return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
     }
-    tentativas.delete(chaveNome);
+    if (u.bloqueado) {
+      await registrarLogin(req, { usuarioId: u.id, email: login, sucesso: false, tipo: 'conta-bloqueada' });
+      return res.status(403).json({ erro: 'Esta conta foi bloqueada pelo administrador.' });
+    }
+    tentativas.delete(chaveConta);
+    await q('UPDATE usuarios SET ultimo_login = now() WHERE id = $1', [u.id]);
+    await registrarLogin(req, { usuarioId: u.id, email: login, sucesso: true, tipo: 'login' });
     await criarSessao(res, req, u.id);
     res.json({ usuario: await perfil(u.id) });
+  });
+
+  // Contas antigas (criadas antes do e-mail) podem adicionar um e-mail
+  r.post('/email', precisaLogin, async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!EMAIL_VALIDO.test(email) || email.length > 254) return res.status(400).json({ erro: 'Digite um e-mail válido.' });
+    const [atual] = await q('SELECT email FROM usuarios WHERE id = $1', [req.usuario.id]);
+    if (atual?.email) return res.status(400).json({ erro: 'Sua conta já tem um e-mail.' });
+    try {
+      await q('UPDATE usuarios SET email = $2 WHERE id = $1', [req.usuario.id, email]);
+    } catch {
+      return res.status(409).json({ erro: 'Esse e-mail já está em uso em outra conta.' });
+    }
+    res.json({ usuario: await perfil(req.usuario.id) });
   });
 
   r.post('/sair', async (req, res) => {
@@ -329,6 +386,95 @@ export function rotasDeContas({ presenca, avisar }) {
     await q('DELETE FROM amizades WHERE (de = $1 AND para = $2) OR (de = $2 AND para = $1)', [eu, id]);
     avisar(id, 'amigos-mudou', {});
     res.json({ ok: true });
+  });
+
+  /* ---------- Painel do administrador ---------- */
+  const soAdmin = (req, res, next) => (req.usuario?.admin ? next() : res.status(403).json({ erro: 'Acesso só para o administrador.' }));
+
+  r.get('/admin/resumo', soAdmin, async (req, res) => {
+    const [n] = await q(`SELECT
+      (SELECT count(*)::int FROM usuarios) AS contas,
+      (SELECT count(*)::int FROM usuarios WHERE criado_em > now() - interval '1 day') AS contas_hoje,
+      (SELECT count(*)::int FROM usuarios WHERE bloqueado) AS bloqueadas,
+      (SELECT count(*)::int FROM logins WHERE sucesso AND quando > now() - interval '1 day') AS logins_hoje,
+      (SELECT count(*)::int FROM logins WHERE NOT sucesso AND quando > now() - interval '1 day') AS falhas_hoje,
+      (SELECT count(*)::int FROM partidas WHERE criado_em > now() - interval '1 day') AS partidas_hoje,
+      (SELECT count(*)::int FROM partidas) AS partidas_total`);
+    res.json({ ...n, ...painel() });
+  });
+
+  r.get('/admin/usuarios', soAdmin, async (req, res) => {
+    const busca = `%${String(req.query.busca || '').trim().toLowerCase()}%`;
+    const rows = await q(
+      `SELECT u.id, u.nome, u.email, round(u.elo)::int AS elo, u.vitorias, u.derrotas, u.empates,
+              u.bot_vitorias, u.bot_derrotas, u.bot_empates, cardinality(u.problemas) AS problemas,
+              u.bloqueado, u.criado_em, u.ultimo_login,
+              (SELECT count(*)::int FROM amizades a WHERE a.aceita AND (a.de = u.id OR a.para = u.id)) AS amigos
+       FROM usuarios u
+       WHERE lower(u.nome) LIKE $1 OR lower(coalesce(u.email, '')) LIKE $1
+       ORDER BY u.criado_em DESC LIMIT 200`,
+      [busca]
+    );
+    res.json(rows.map((u) => ({ ...u, admin: ehAdmin(u.email), ...presenca(u.id) })));
+  });
+
+  r.get('/admin/logins', soAdmin, async (req, res) => {
+    const rows = await q(
+      `SELECT l.quando, l.email, l.sucesso, l.tipo, l.ip, l.navegador, u.nome
+       FROM logins l LEFT JOIN usuarios u ON u.id = l.usuario_id
+       ORDER BY l.quando DESC LIMIT 200`
+    );
+    res.json(rows);
+  });
+
+  r.get('/admin/partidas', soAdmin, async (req, res) => {
+    const rows = await q(
+      `SELECT branco_nome, preto_nome, vencedor, motivo, lances, criado_em
+       FROM partidas ORDER BY criado_em DESC LIMIT 100`
+    );
+    res.json(rows);
+  });
+
+  r.get('/admin/salas', soAdmin, (req, res) => res.json(painel().salas));
+
+  // Ações sobre uma conta (nunca sobre a própria conta do admin)
+  async function alvoDaAcao(req, res) {
+    const id = Number(req.body?.id);
+    const [u] = await q('SELECT id, nome, email FROM usuarios WHERE id = $1', [id]);
+    if (!u) { res.status(404).json({ erro: 'Conta não encontrada.' }); return null; }
+    if (u.id === req.usuario.id || ehAdmin(u.email)) { res.status(400).json({ erro: 'Você não pode fazer isso com a conta de administrador.' }); return null; }
+    return u;
+  }
+
+  r.post('/admin/bloquear', soAdmin, async (req, res) => {
+    const u = await alvoDaAcao(req, res);
+    if (!u) return;
+    const bloquear = req.body?.bloquear !== false;
+    await q('UPDATE usuarios SET bloqueado = $2 WHERE id = $1', [u.id, bloquear]);
+    if (bloquear) {
+      await q('DELETE FROM sessoes WHERE usuario_id = $1', [u.id]);
+      desconectar(u.id);
+    }
+    res.json({ ok: true, texto: bloquear ? `${u.nome} foi bloqueado.` : `${u.nome} foi desbloqueado.` });
+  });
+
+  r.post('/admin/senha', soAdmin, async (req, res) => {
+    const u = await alvoDaAcao(req, res);
+    if (!u) return;
+    const nova = String(req.body?.nova || '');
+    if (nova.length < 6 || nova.length > 100) return res.status(400).json({ erro: 'A senha deve ter pelo menos 6 caracteres.' });
+    await q('UPDATE usuarios SET senha_hash = $2 WHERE id = $1', [u.id, await gerarHash(nova)]);
+    await q('DELETE FROM sessoes WHERE usuario_id = $1', [u.id]);
+    desconectar(u.id);
+    res.json({ ok: true, texto: `Senha de ${u.nome} trocada. Avise a pessoa da nova senha.` });
+  });
+
+  r.post('/admin/excluir', soAdmin, async (req, res) => {
+    const u = await alvoDaAcao(req, res);
+    if (!u) return;
+    desconectar(u.id);
+    await q('DELETE FROM usuarios WHERE id = $1', [u.id]);
+    res.json({ ok: true, texto: `A conta de ${u.nome} foi excluída.` });
   });
 
   // Erros inesperados (ex.: banco fora do ar)

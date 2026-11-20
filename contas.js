@@ -243,6 +243,28 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     res.json({ usuario: await perfil(u.id) });
   });
 
+  // Trocar o e-mail (pede a senha para confirmar)
+  r.post('/trocar-email', precisaLogin, async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const senha = String(req.body?.senha || '');
+    if (!EMAIL_VALIDO.test(email) || email.length > 254) return res.status(400).json({ erro: 'Digite um e-mail válido.' });
+    const chave = 'email:' + req.usuario.id;
+    if (bloqueado(chave)) return res.status(429).json({ erro: 'Muitas tentativas erradas. Espere 15 minutos.' });
+    const [u] = await q('SELECT senha_hash, email FROM usuarios WHERE id = $1', [req.usuario.id]);
+    if (!u || !(await conferirSenha(senha, u.senha_hash))) {
+      registrarFalha(chave);
+      return res.status(401).json({ erro: 'Senha incorreta.' });
+    }
+    if ((u.email || '') === email) return res.status(400).json({ erro: 'Esse já é o seu e-mail.' });
+    try {
+      await q('UPDATE usuarios SET email = $2 WHERE id = $1', [req.usuario.id, email]);
+    } catch {
+      return res.status(409).json({ erro: 'Esse e-mail já está em uso em outra conta.' });
+    }
+    await registrarLogin(req, { usuarioId: req.usuario.id, email: `${u.email || '(sem e-mail)'} → ${email}`, sucesso: true, tipo: 'troca-email' });
+    res.json({ usuario: await perfil(req.usuario.id) });
+  });
+
   // Contas antigas (criadas antes do e-mail) podem adicionar um e-mail
   r.post('/email', precisaLogin, async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();

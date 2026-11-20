@@ -1709,6 +1709,20 @@ $('email-form').onsubmit = async (e) => {
   }
 };
 
+$('troca-email-form').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api('/trocar-email', { email: $('troca-email-novo').value.trim(), senha: $('troca-email-senha').value });
+    $('troca-email-form').reset();
+    $('trocar-email').open = false;
+    await aplicarConta(r.usuario);
+    avisar(conta.admin ? 'E-mail trocado! Você agora tem acesso ao painel de admin. 🛠️' : 'E-mail trocado! ✉️');
+    abrirPerfil();
+  } catch (err) {
+    avisar(err.message);
+  }
+};
+
 /* ---------- Painel do administrador ---------- */
 let abaAdmin = 'resumo';
 const dataHora = (d) => (d ? new Date(d).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -1830,7 +1844,7 @@ async function carregarAdmin() {
       ));
     } else if (abaAdmin === 'logins') {
       const lista = await api('/admin/logins');
-      const TIPOS = { login: 'login', cadastro: 'criou conta', 'senha-errada': 'senha errada', 'conta-bloqueada': 'conta bloqueada', 'bloqueado-tentativas': 'muitas tentativas' };
+      const TIPOS = { login: 'login', cadastro: 'criou conta', 'troca-email': 'trocou e-mail', 'senha-errada': 'senha errada', 'conta-bloqueada': 'conta bloqueada', 'bloqueado-tentativas': 'muitas tentativas' };
       el.innerHTML = '';
       el.appendChild(tabela(
         ['Quando', 'Resultado', 'Conta', 'E-mail digitado', 'IP', 'Navegador'],

@@ -411,6 +411,42 @@ button.icone { padding: 6px 12px; font-size: 18px; line-height: 1.2; }
 .ranking-caixa td:nth-child(3) { font-weight: 700; color: #ffd76a; }
 .ranking-caixa .nota { display: block; margin: 10px 0; color: var(--suave); }
 
+/* ---------- Conta ---------- */
+button.conta-btn { padding: 6px 12px; font-size: 14px; font-weight: 600; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apelido input:disabled { opacity: 0.75; cursor: not-allowed; }
+
+.login-caixa { width: min(92vw, 360px); display: flex; flex-direction: column; gap: 12px; text-align: left; }
+.login-caixa label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--suave); }
+.login-caixa input { color: var(--texto); }
+.abas { display: flex; gap: 6px; }
+.aba { flex: 1; background: transparent; }
+.aba.ativa { background: var(--card2); border-color: var(--verde); font-weight: 700; }
+.erro { margin: 0 !important; font-size: 14px !important; font-weight: 400 !important; color: #ff8a8a; }
+.nota { color: var(--suave); font-size: 13px; }
+
+.perfil-caixa { width: min(94vw, 520px); max-height: 88vh; overflow-y: auto; text-align: left; }
+.perfil-caixa h3 { margin: 18px 0 8px; font-size: 16px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.stats div { display: flex; flex-direction: column; align-items: center; padding: 10px 4px; border-radius: 10px; background: var(--card2); text-align: center; }
+.stats b { font-size: 20px; color: #ffd76a; }
+.stats small { color: var(--suave); font-size: 11px; }
+.linha { display: flex; gap: 8px; flex-wrap: wrap; }
+.linha input { flex: 1; min-width: 120px; }
+.amigo { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--borda); }
+.amigo span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.amigo button { padding: 5px 10px; font-size: 13px; }
+#amigos-recebidos .amigo { background: #2f3d3a; border-radius: 8px; padding: 8px; margin: 6px 0; border: 0; }
+.partidas .partida { padding: 6px 0; border-bottom: 1px solid var(--borda); font-size: 14px; }
+.partidas .partida.vitoria { color: #9be59a; }
+.partidas .partida.derrota { color: #ff9a9a; }
+.trocar-senha { margin-top: 16px; }
+.trocar-senha summary { cursor: pointer; color: var(--suave); margin-bottom: 8px; }
+.convite-amigos { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; width: 100%; }
+.convite-amigos button { padding: 6px 12px; font-size: 14px; }
+@media (max-width: 520px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* ---------- Confete e conexão ---------- */
 .confete { position: fixed; inset: 0; pointer-events: none; z-index: 200; }
 #conexao {

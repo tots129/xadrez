@@ -211,7 +211,10 @@ function aplicarTema(tema) {
   $('tema').value = tema;
   guardar.salvar('xadrez-tema', tema);
 }
-$('tema').onchange = () => aplicarTema($('tema').value);
+$('tema').onchange = () => {
+  aplicarTema($('tema').value);
+  if (conta) api('/preferencias', { tema: $('tema').value }).catch(() => {});
+};
 
 /* ============================================================
    CONFETE
@@ -369,10 +372,14 @@ function voltarAoMenu() {
   fecharDialogo();
   if (socket) {
     socket.emit('sair-sala');
-    socket.disconnect();
-    socket = null;
+    // Com conta, a conexão continua aberta para receber convites dos amigos
+    if (!conta) {
+      socket.disconnect();
+      socket = null;
+    }
   }
   salaAtual = null;
+  amigoParaConvidar = null;
   try { sessionStorage.removeItem('xadrez-sala'); } catch { /* ok */ }
   history.replaceState(null, '', location.pathname);
   partidaId++;
@@ -600,7 +607,8 @@ function nomeDoJogador(cor) {
   if (modo === 'bot') return cor === minhaCor ? eu : `🤖 Bot (${NOMES_NIVEL[nivel]})`;
   if (modo === 'online') {
     const vazio = jogo.history().length || fimExtra ? 'Saiu da sala' : 'Aguardando...';
-    const n = nomesOnline[cor]?.nome || (cor === minhaCor ? eu : vazio);
+    const j = nomesOnline[cor];
+    const n = (j?.nome || (cor === minhaCor ? eu : vazio)) + (j && !j.conta ? ' (convidado)' : '');
     return cor === minhaCor ? `${n} (você)` : n;
   }
   if (modo === 'problema') return cor === minhaCor ? eu : 'Defesa';
@@ -869,6 +877,11 @@ function terminar(texto, vencedor) {
 
 function comemorar(vencedor) {
   const euVenci = modo === 'local' ? vencedor !== null : vencedor === minhaCor;
+  // Salva o resultado contra o bot na conta
+  if (modo === 'bot' && conta) {
+    const resultado = vencedor === null ? 'e' : euVenci ? 'v' : 'd';
+    api('/progresso/bot', { resultado }).then((r) => (conta = r.usuario)).catch(() => {});
+  }
   if (vencedor === null) SONS.empate();
   else if (euVenci) {
     SONS.vitoria();
@@ -987,6 +1000,7 @@ function conferirProblema() {
     ativo = false;
     resolvidos.add(problemaAtual);
     guardar.salvar('xadrez-resolvidos', [...resolvidos]);
+    if (conta) api('/progresso/problemas', { resolvidos: [problemaAtual] }).then((r) => (conta = r.usuario)).catch(() => {});
     $('status').textContent = 'Resolvido! Muito bem! ✅';
     $('status').className = 'fim';
     $('info').textContent = `Problema ${problemaAtual + 1} de ${PROBLEMAS.length}: ${PROBLEMAS[problemaAtual].nome} ✅`;
@@ -1229,6 +1243,14 @@ function conectar() {
 
     const esperando = !s.iniciada;
     $('convite').hidden = !esperando;
+    if (esperando) {
+      if (amigoParaConvidar) {
+        socket.emit('convidar', amigoParaConvidar.id);
+        avisar(`Convite enviado para ${amigoParaConvidar.nome}! 📨`);
+        amigoParaConvidar = null;
+      }
+      mostrarAmigosParaConvidar();
+    }
     $('codigo-sala').textContent = s.codigo;
     const tempo = s.base ? ` · ⏱ ${s.base / 60000} min${s.incremento ? ` + ${s.incremento / 1000}s` : ''}` : '';
     $('info').textContent = `Sala ${s.codigo} · Você joga de ${s.cor === 'w' ? 'brancas' : 'pretas'}${tempo}`;
@@ -1316,6 +1338,28 @@ function conectar() {
     if (cor !== minhaCor) SONS.msg();
   });
 
+  socket.on('amigos-mudou', ({ texto } = {}) => {
+    if (texto) {
+      avisar(texto);
+      SONS.msg();
+    }
+    if (!$('perfil').hidden) carregarAmigos();
+    if (!$('convite').hidden) mostrarAmigosParaConvidar();
+  });
+
+  socket.on('convite', async ({ de, codigo }) => {
+    SONS.msg();
+    if (emAndamento() && modo !== 'problema') {
+      avisar(`${de} te convidou para jogar, mas você está numa partida.`);
+      return;
+    }
+    const r = await perguntar(`${de} te convidou para uma partida online! ♟️`, 'Jogar', 'Agora não');
+    if (!r) return;
+    if (salaAtual && salaAtual !== codigo) socket.emit('sair-sala');
+    escolherModo('online');
+    entrarNaSala(codigo);
+  });
+
   socket.on('erro-sala', (mensagem) => {
     avisar(mensagem);
     SONS.erro();
@@ -1384,11 +1428,300 @@ $('btn-ranking').onclick = async () => {
 $('ranking-fechar').onclick = () => ($('ranking').hidden = true);
 
 /* ============================================================
+   CONTAS, PROGRESSO E AMIGOS
+============================================================ */
+let conta = null;            // perfil do usuário logado (ou null)
+let amigoParaConvidar = null; // { id, nome } para convidar quando a sala for criada
+
+async function api(caminho, corpo) {
+  const opcoes = corpo === undefined
+    ? { credentials: 'same-origin' }
+    : { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) };
+  const resp = await fetch('/api' + caminho, opcoes);
+  const dados = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(dados.erro || 'Algo deu errado. Tente de novo.');
+  return dados;
+}
+
+// Depois de entrar/sair: a conexão online precisa saber quem é você
+function renovarConexao() {
+  if (socket && !salaAtual) {
+    socket.disconnect();
+    socket = null;
+  }
+  if (conta) conectar();
+}
+
+async function aplicarConta(usuario) {
+  conta = usuario;
+  $('btn-conta').textContent = conta ? `👤 ${conta.nome}` : '👤 Entrar';
+  $('apelido').disabled = !!conta;
+  $('apelido').parentElement.title = conta ? 'Seu nome é o da sua conta' : '';
+  if (!conta) return;
+  $('apelido').value = conta.nome;
+  if (conta.tema) aplicarTema(conta.tema);
+  // Junta os problemas resolvidos neste aparelho com os da conta
+  const daConta = new Set(conta.problemas || []);
+  const soAqui = [...resolvidos].filter((i) => !daConta.has(i));
+  resolvidos = new Set([...resolvidos, ...daConta]);
+  guardar.salvar('xadrez-resolvidos', [...resolvidos]);
+  if (soAqui.length) {
+    try { conta = (await api('/progresso/problemas', { resolvidos: soAqui })).usuario; } catch { /* tenta de novo depois */ }
+  }
+  if (!$('opcoes-problema').hidden) atualizarProgressoProblemas();
+}
+
+async function carregarConta() {
+  try {
+    const r = await api('/eu');
+    $('btn-conta').hidden = !r.contas;
+    await aplicarConta(r.usuario);
+    if (conta) conectar();
+  } catch {
+    $('btn-conta').hidden = true;
+  }
+}
+
+/* ---------- Tela de entrar / criar conta ---------- */
+let abaLogin = 'entrar';
+function trocarAbaLogin(aba) {
+  abaLogin = aba;
+  document.querySelectorAll('.aba').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === aba));
+  const cadastro = aba === 'cadastrar';
+  $('login-confirmar-label').hidden = !cadastro;
+  $('login-dica').hidden = !cadastro;
+  $('login-senha').autocomplete = cadastro ? 'new-password' : 'current-password';
+  $('login-enviar').textContent = cadastro ? 'Criar conta' : 'Entrar';
+  $('login-erro').hidden = true;
+}
+document.querySelectorAll('.aba').forEach((b) => (b.onclick = () => trocarAbaLogin(b.dataset.aba)));
+
+$('btn-conta').onclick = () => {
+  if (conta) return abrirPerfil();
+  trocarAbaLogin('entrar');
+  $('login-form').reset();
+  $('login').hidden = false;
+  $('login-nome').focus();
+};
+$('login-fechar').onclick = () => ($('login').hidden = true);
+
+$('login-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const nome = $('login-nome').value.trim();
+  const senha = $('login-senha').value;
+  const erro = (t) => {
+    $('login-erro').textContent = t;
+    $('login-erro').hidden = false;
+  };
+  if (abaLogin === 'cadastrar' && senha !== $('login-confirmar').value) return erro('As senhas não são iguais.');
+  $('login-enviar').disabled = true;
+  try {
+    const r = await api(abaLogin === 'cadastrar' ? '/cadastrar' : '/entrar', { nome, senha });
+    $('login').hidden = true;
+    $('login-form').reset();
+    await aplicarConta(r.usuario);
+    renovarConexao();
+    avisar(abaLogin === 'cadastrar' ? `Conta criada! Bem-vindo, ${conta.nome}! 🎉` : `Olá de novo, ${conta.nome}! 👋`);
+  } catch (err) {
+    erro(err.message);
+  } finally {
+    $('login-enviar').disabled = false;
+  }
+};
+
+/* ---------- Minha conta ---------- */
+async function abrirPerfil() {
+  $('perfil').hidden = false;
+  try {
+    conta = (await api('/eu')).usuario || conta;
+  } catch { /* mostra o que já tem */ }
+  if (!conta) {
+    $('perfil').hidden = true;
+    return aplicarConta(null);
+  }
+  $('perfil-nome').textContent = conta.nome;
+  $('st-elo').textContent = conta.elo;
+  $('st-online').textContent = `${conta.vitorias}/${conta.empates}/${conta.derrotas}`;
+  $('st-bot').textContent = `${conta.bot_vitorias}/${conta.bot_empates}/${conta.bot_derrotas}`;
+  $('st-problemas').textContent = `${resolvidos.size}/${PROBLEMAS.length}`;
+  carregarAmigos();
+  carregarPartidas();
+}
+$('perfil-fechar').onclick = () => ($('perfil').hidden = true);
+
+$('btn-sair-conta').onclick = async () => {
+  try { await api('/sair', {}); } catch { /* sai mesmo assim */ }
+  $('perfil').hidden = true;
+  $('apelido').value = '';
+  guardar.salvar('xadrez-nome', '');
+  await aplicarConta(null);
+  renovarConexao();
+  avisar('Você saiu da conta.');
+};
+
+$('senha-form').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api('/trocar-senha', { atual: $('senha-atual').value, nova: $('senha-nova').value });
+    $('senha-form').reset();
+    avisar('Senha trocada! 🔑');
+  } catch (err) {
+    avisar(err.message);
+  }
+};
+
+const MOTIVOS = { mate: 'xeque-mate', tempo: 'tempo', desistencia: 'desistência', abandono: 'abandono', acordo: 'acordo', afogamento: 'afogamento', repeticao: 'repetição', material: 'material insuficiente', empate: 'empate' };
+
+async function carregarPartidas() {
+  const el = $('partidas-lista');
+  el.textContent = 'Carregando...';
+  try {
+    const lista = await api('/partidas');
+    el.innerHTML = '';
+    if (!lista.length) el.textContent = 'Nenhuma partida online ainda.';
+    for (const p of lista) {
+      const div = document.createElement('div');
+      div.className = 'partida ' + p.resultado;
+      const icone = { vitoria: '🏆 Vitória', derrota: '❌ Derrota', empate: '🤝 Empate' }[p.resultado];
+      const data = new Date(p.quando).toLocaleDateString('pt-BR');
+      div.textContent = `${icone} contra ${p.oponente} · ${MOTIVOS[p.motivo] || p.motivo} · ${data}`;
+      el.appendChild(div);
+    }
+  } catch {
+    el.textContent = 'Não foi possível carregar.';
+  }
+}
+
+function linhaAmigo(texto, botoes) {
+  const div = document.createElement('div');
+  div.className = 'amigo';
+  const span = document.createElement('span');
+  span.textContent = texto;
+  div.appendChild(span);
+  for (const [rotulo, acao, destaque] of botoes) {
+    const b = document.createElement('button');
+    b.textContent = rotulo;
+    if (destaque) b.className = 'destaque';
+    b.onclick = acao;
+    div.appendChild(b);
+  }
+  return div;
+}
+
+async function acaoAmigo(caminho, id) {
+  try {
+    await api(caminho, { id });
+  } catch (err) {
+    avisar(err.message);
+  }
+  carregarAmigos();
+}
+
+function desafiar(amigo) {
+  $('perfil').hidden = true;
+  amigoParaConvidar = amigo;
+  const [minutos, incremento] = $('relogio-online').value.split('+').map(Number);
+  salaAtual = null;
+  conectar().emit('criar-sala', { nome: meuNome(), id: meuId, sessao: minhaSessao, minutos, incremento });
+}
+
+async function carregarAmigos() {
+  const lista = $('amigos-lista');
+  const recebidos = $('amigos-recebidos');
+  const enviados = $('amigos-enviados');
+  try {
+    const r = await api('/amigos');
+    recebidos.innerHTML = '';
+    lista.innerHTML = '';
+    enviados.innerHTML = '';
+    for (const a of r.recebidos) {
+      recebidos.appendChild(linhaAmigo(`📩 ${a.nome} quer ser seu amigo`, [
+        ['Aceitar', () => acaoAmigo('/amigos/aceitar', a.id), true],
+        ['Recusar', () => acaoAmigo('/amigos/remover', a.id)],
+      ]));
+    }
+    if (!r.amigos.length) {
+      const p = document.createElement('p');
+      p.className = 'nota';
+      p.textContent = 'Você ainda não tem amigos aqui. Adicione pelo nome de usuário!';
+      lista.appendChild(p);
+    }
+    for (const a of r.amigos) {
+      const estado = a.jogando ? '🟡 jogando' : a.online ? '🟢 online' : '⚪ offline';
+      const botoes = [];
+      if (a.online && !a.jogando) botoes.push(['⚔️ Desafiar', () => desafiar(a), true]);
+      botoes.push(['✕', async () => {
+        const ok = await perguntarPorCima(`Desfazer a amizade com ${a.nome}?`);
+        if (ok) acaoAmigo('/amigos/remover', a.id);
+      }]);
+      const linha = linhaAmigo(`${a.nome} · ${a.elo} pts · ${estado}`, botoes);
+      linha.lastChild.title = 'Desfazer amizade';
+      lista.appendChild(linha);
+    }
+    for (const a of r.enviados) {
+      enviados.appendChild(linhaAmigo(`⏳ Pedido enviado para ${a.nome}`, [['Cancelar', () => acaoAmigo('/amigos/remover', a.id)]]));
+    }
+  } catch (err) {
+    lista.textContent = err.message;
+  }
+}
+
+// O diálogo de pergunta fica por baixo do perfil; esconde o perfil enquanto pergunta
+async function perguntarPorCima(texto) {
+  $('perfil').hidden = true;
+  const r = await perguntar(texto, 'Sim', 'Não');
+  $('perfil').hidden = false;
+  return r;
+}
+
+$('amigo-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const nome = $('amigo-nome').value.trim();
+  if (!nome) return;
+  try {
+    const r = await api('/amigos/pedir', { nome });
+    $('amigo-nome').value = '';
+    avisar(r.texto);
+  } catch (err) {
+    avisar(err.message);
+  }
+  carregarAmigos();
+};
+
+// Na sala de espera: botões para chamar amigos online
+async function mostrarAmigosParaConvidar() {
+  const el = $('convite-amigos');
+  el.hidden = true;
+  if (!conta) return;
+  try {
+    const { amigos } = await api('/amigos');
+    const livres = amigos.filter((a) => a.online && !a.jogando);
+    el.innerHTML = '';
+    if (!livres.length) return;
+    const t = document.createElement('small');
+    t.textContent = 'Amigos online:';
+    el.appendChild(t);
+    for (const a of livres) {
+      const b = document.createElement('button');
+      b.textContent = `📨 ${a.nome}`;
+      b.onclick = () => {
+        socket.emit('convidar', a.id);
+        b.disabled = true;
+        b.textContent = `✓ ${a.nome}`;
+      };
+      el.appendChild(b);
+    }
+    el.hidden = false;
+  } catch { /* sem amigos para mostrar */ }
+}
+
+/* ============================================================
    INÍCIO
 ============================================================ */
 aplicarTema(guardar.ler('xadrez-tema', 'madeira'));
 atualizarBotaoSom();
 mostrar('menu');
+await carregarConta();
 
 // Abriu um link de convite (?sala=XXXX) ou recarregou a página no meio de uma partida
 const salaDoLink = new URLSearchParams(location.search).get('sala');

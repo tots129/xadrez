@@ -1,24 +1,46 @@
 import express from 'express';
 import http from 'http';
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { Chess } from 'chess.js';
+import { prepararBanco } from './db.js';
+import { rotasDeContas, lerCookie, usuarioDaSessao, registrarPartida, saoAmigos } from './contas.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+app.set('trust proxy', 1); // o Render fica na frente do servidor (HTTPS)
 const server = http.createServer(app);
 const io = new Server(server);
 
 // Quanto tempo esperar um jogador que caiu antes de dar a partida como abandonada
 const ESPERA_RECONEXAO_MS = 60_000;
 
-// Só estes arquivos ficam públicos (o server.js e o ranking.json, por exemplo, não).
+// Só estes arquivos ficam públicos (o server.js, db.js e contas.js, por exemplo, não).
 const ARQUIVOS_PUBLICOS = ['index.html', 'style.css', 'app.js'];
 
+/* ============================================================
+   QUEM ESTÁ ONLINE (para a lista de amigos)
+============================================================ */
+const abasDoUsuario = new Map(); // usuarioId -> Set(socketId)
+
+function presenca(usuarioId) {
+  const online = (abasDoUsuario.get(usuarioId)?.size || 0) > 0;
+  let jogando = false;
+  for (const sala of salas.values()) {
+    if (sala.iniciada && !sala.encerrada &&
+        (sala.jogadores.w?.usuarioId === usuarioId || sala.jogadores.b?.usuarioId === usuarioId)) {
+      jogando = true;
+      break;
+    }
+  }
+  return { online, jogando };
+}
+
+const avisar = (usuarioId, evento, dados) => io.to(`u:${usuarioId}`).emit(evento, dados);
+
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.get('/api/ranking', (req, res) => res.json(topRanking()));
+app.use('/api', rotasDeContas({ presenca, avisar }));
 app.get('/:arquivo', (req, res, next) => {
   if (ARQUIVOS_PUBLICOS.includes(req.params.arquivo)) {
     return res.sendFile(path.join(__dirname, req.params.arquivo));
@@ -26,55 +48,17 @@ app.get('/:arquivo', (req, res, next) => {
   next();
 });
 
-/* ============================================================
-   RANKING (pontuação Elo, salvo em ranking.json)
-   Atenção: no Render gratuito o disco é apagado a cada novo deploy/reinício,
-   então o ranking recomeça do zero nessas horas.
-============================================================ */
-const ARQUIVO_RANKING = path.join(__dirname, 'ranking.json');
-let ranking = {};
-try {
-  ranking = JSON.parse(fs.readFileSync(ARQUIVO_RANKING, 'utf8'));
-} catch {
-  ranking = {};
-}
-
-let salvarTimer = null;
-function salvarRanking() {
-  clearTimeout(salvarTimer);
-  salvarTimer = setTimeout(() => {
-    fs.writeFile(ARQUIVO_RANKING, JSON.stringify(ranking), () => {});
-  }, 1000);
-}
-
-function fichaDe(jogador) {
-  if (!ranking[jogador.id]) ranking[jogador.id] = { nome: jogador.nome, elo: 1200, v: 0, d: 0, e: 0 };
-  ranking[jogador.id].nome = jogador.nome; // mantém o apelido mais recente
-  return ranking[jogador.id];
-}
-
-function topRanking() {
-  return Object.values(ranking)
-    .sort((a, b) => b.elo - a.elo)
-    .slice(0, 20)
-    .map(({ nome, elo, v, d, e }) => ({ nome, elo: Math.round(elo), v, d, e }));
-}
-
-function registrarNoRanking(sala, vencedor) {
+// Partida terminada: guarda no histórico e atualiza o ranking das contas
+function registrarNoRanking(sala, vencedor, motivo) {
   const { w, b } = sala.jogadores;
-  if (!w || !b || w.id === b.id) return;
-  if (sala.chess.history().length < 4) return; // partidas curtas demais não contam
-  const fw = fichaDe(w);
-  const fb = fichaDe(b);
-  const esperadoW = 1 / (1 + 10 ** ((fb.elo - fw.elo) / 400));
-  const placarW = vencedor === 'w' ? 1 : vencedor === 'b' ? 0 : 0.5;
-  const K = 32;
-  fw.elo += K * (placarW - esperadoW);
-  fb.elo += K * ((1 - placarW) - (1 - esperadoW));
-  if (vencedor === 'w') { fw.v++; fb.d++; }
-  else if (vencedor === 'b') { fb.v++; fw.d++; }
-  else { fw.e++; fb.e++; }
-  salvarRanking();
+  if (!w || !b) return;
+  registrarPartida({
+    branco: { usuarioId: w.usuarioId, nome: w.nome },
+    preto: { usuarioId: b.usuarioId, nome: b.nome },
+    vencedor,
+    motivo,
+    lances: sala.chess.history().length,
+  }).catch((e) => console.error('Erro ao salvar partida:', e.message));
 }
 
 /* ============================================================
@@ -110,7 +94,7 @@ function infoJogadores(sala) {
   const info = {};
   for (const cor of ['w', 'b']) {
     const j = sala.jogadores[cor];
-    info[cor] = j ? { nome: j.nome, conectado: j.conectado } : null;
+    info[cor] = j ? { nome: j.nome, conectado: j.conectado, conta: !!j.usuarioId, usuarioId: j.usuarioId } : null;
   }
   return info;
 }
@@ -157,7 +141,7 @@ function finalizar(sala, codigo, resultado) {
   sala.ofertaDe = null;
   sala.revanche = new Set();
   clearTimeout(sala.timerTempo);
-  registrarNoRanking(sala, resultado.vencedor);
+  registrarNoRanking(sala, resultado.vencedor, resultado.motivo);
   io.to(codigo).emit('fim', { ...resultado, relogio: relogioAgora(sala), jogadores: infoJogadores(sala) });
 }
 
@@ -221,16 +205,46 @@ function jogadorSaiu(socket, imediato) {
 /* ============================================================
    CONEXÕES
 ============================================================ */
+// Descobre se quem conectou está logado (pelo cookie da sessão)
+io.use(async (socket, next) => {
+  try {
+    socket.data.usuario = await usuarioDaSessao(lerCookie(socket.handshake.headers.cookie));
+  } catch {
+    socket.data.usuario = null;
+  }
+  next();
+});
+
 io.on('connection', (socket) => {
   let ultimaMsg = 0;
+  const usuario = socket.data.usuario;
+  if (usuario) {
+    socket.join(`u:${usuario.id}`);
+    if (!abasDoUsuario.has(usuario.id)) abasDoUsuario.set(usuario.id, new Set());
+    abasDoUsuario.get(usuario.id).add(socket.id);
+  }
 
-  // id = jogador (para o ranking); sessao = aba do navegador (para reconectar)
+  // sessao = aba do navegador (para reconectar). Logado: usa o nome da conta.
   const novoJogador = (id, sessao, nome) => ({
     id: String(id || socket.id).slice(0, 64),
+    usuarioId: usuario?.id || null,
     sessao: String(sessao || socket.id).slice(0, 64),
-    nome: limparNome(nome),
+    nome: usuario ? usuario.nome : limparNome(nome),
     socket: socket.id,
     conectado: true,
+  });
+
+  // Convidar um amigo para a sala em que estou esperando
+  socket.on('convidar', async (amigoId) => {
+    const sala = salas.get(socket.data.sala);
+    if (!usuario || !sala || sala.iniciada) return;
+    try {
+      if (!(await saoAmigos(usuario.id, Number(amigoId)))) return;
+    } catch {
+      return;
+    }
+    avisar(Number(amigoId), 'convite', { de: usuario.nome, codigo: socket.data.sala });
+    socket.emit('convite-enviado');
   });
 
   socket.on('criar-sala', ({ nome, id, sessao, minutos, incremento } = {}) => {
@@ -278,7 +292,7 @@ io.on('connection', (socket) => {
       clearTimeout(j.timerSaida);
       j.socket = socket.id;
       j.conectado = true;
-      if (nome) j.nome = limparNome(nome);
+      if (nome && !j.usuarioId) j.nome = limparNome(nome);
       socket.join(codigo);
       socket.data.sala = codigo;
       socket.data.cor = cor;
@@ -402,10 +416,22 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sair-sala', () => jogadorSaiu(socket, true));
-  socket.on('disconnect', () => jogadorSaiu(socket, false));
+  socket.on('disconnect', () => {
+    jogadorSaiu(socket, false);
+    if (usuario) {
+      const abas = abasDoUsuario.get(usuario.id);
+      abas?.delete(socket.id);
+      if (abas && !abas.size) abasDoUsuario.delete(usuario.id);
+    }
+  });
 });
 
 const PORTA = process.env.PORT || 3000;
+try {
+  await prepararBanco();
+} catch (e) {
+  console.error('Não consegui preparar o banco de dados:', e.message);
+}
 server.listen(PORTA, () => {
   console.log(`Xadrez rodando em http://localhost:${PORTA}`);
 });

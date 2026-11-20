@@ -27,6 +27,7 @@
         </label>
         <button id="btn-som" class="icone" title="Desligar sons">🔊</button>
         <button id="btn-ranking" class="icone" title="Ranking">🏆</button>
+        <button id="btn-conta" class="conta-btn" hidden>👤 Entrar</button>
       </div>
     </header>
 
@@ -139,6 +140,7 @@
         <span>Código da sala: <b id="codigo-sala"></b></span>
         <button id="btn-copiar" class="destaque">📋 Copiar link de convite</button>
         <small>Mande o link para seu amigo. A partida começa quando ele entrar.</small>
+        <div id="convite-amigos" class="convite-amigos" hidden></div>
       </div>
 
       <div class="jogador" id="jog-topo">
@@ -204,8 +206,72 @@
         <thead><tr><th></th><th>Jogador</th><th>Pontos</th><th>Partidas</th></tr></thead>
         <tbody id="ranking-lista"></tbody>
       </table>
-      <small class="nota">Só contam partidas online com pelo menos 2 lances de cada lado.</small>
+      <small class="nota">Só contam partidas online entre duas contas, com pelo menos 2 lances de cada lado.</small>
       <div class="dialogo-botoes"><button id="ranking-fechar">Fechar</button></div>
+    </div>
+  </div>
+
+  <!-- Entrar / criar conta -->
+  <div id="login" class="overlay" hidden>
+    <form id="login-form" class="caixa login-caixa" autocomplete="on">
+      <div class="abas">
+        <button type="button" class="aba ativa" data-aba="entrar">Entrar</button>
+        <button type="button" class="aba" data-aba="cadastrar">Criar conta</button>
+      </div>
+      <label>Nome de usuário
+        <input id="login-nome" name="username" maxlength="16" autocomplete="username" required />
+      </label>
+      <label>Senha
+        <input id="login-senha" name="password" type="password" maxlength="100" autocomplete="current-password" required />
+      </label>
+      <label id="login-confirmar-label" hidden>Confirmar senha
+        <input id="login-confirmar" type="password" maxlength="100" autocomplete="new-password" />
+      </label>
+      <small id="login-dica" class="nota" hidden>3 a 16 caracteres: letras, números ou _. Senha com pelo menos 6 caracteres.</small>
+      <p id="login-erro" class="erro" hidden></p>
+      <div class="dialogo-botoes">
+        <button type="button" id="login-fechar">Cancelar</button>
+        <button type="submit" id="login-enviar" class="destaque">Entrar</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Minha conta -->
+  <div id="perfil" class="overlay" hidden>
+    <div class="caixa perfil-caixa">
+      <p>👤 <span id="perfil-nome"></span></p>
+      <div class="stats">
+        <div><b id="st-elo"></b><small>pontos online</small></div>
+        <div><b id="st-online"></b><small>online (V/E/D)</small></div>
+        <div><b id="st-bot"></b><small>contra o bot (V/E/D)</small></div>
+        <div><b id="st-problemas"></b><small>problemas</small></div>
+      </div>
+
+      <h3>👥 Amigos</h3>
+      <form id="amigo-form" class="linha">
+        <input id="amigo-nome" maxlength="16" placeholder="Nome do amigo" autocomplete="off" />
+        <button type="submit" class="destaque">Adicionar</button>
+      </form>
+      <div id="amigos-recebidos"></div>
+      <div id="amigos-lista"></div>
+      <div id="amigos-enviados"></div>
+
+      <h3>📜 Últimas partidas online</h3>
+      <div id="partidas-lista" class="partidas"></div>
+
+      <details class="trocar-senha">
+        <summary>🔑 Trocar senha</summary>
+        <form id="senha-form" class="linha">
+          <input id="senha-atual" type="password" placeholder="Senha atual" autocomplete="current-password" />
+          <input id="senha-nova" type="password" placeholder="Nova senha" autocomplete="new-password" />
+          <button type="submit">Salvar</button>
+        </form>
+      </details>
+
+      <div class="dialogo-botoes">
+        <button id="btn-sair-conta">Sair da conta</button>
+        <button id="perfil-fechar" class="destaque">Fechar</button>
+      </div>
     </div>
   </div>
 

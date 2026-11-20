@@ -10,6 +10,10 @@
   "dependencies": {
     "chess.js": "^1.0.0",
     "express": "^4.19.2",
+    "pg": "^8.23.1",
     "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.17"
   }
 }

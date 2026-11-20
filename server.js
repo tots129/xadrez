@@ -1,5 +1,6 @@
 import express from 'express';
 import http from 'http';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
@@ -10,10 +11,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Só estes arquivos ficam públicos (o server.js, por exemplo, não).
+// Quanto tempo esperar um jogador que caiu antes de dar a partida como abandonada
+const ESPERA_RECONEXAO_MS = 60_000;
+
+// Só estes arquivos ficam públicos (o server.js e o ranking.json, por exemplo, não).
 const ARQUIVOS_PUBLICOS = ['index.html', 'style.css', 'app.js'];
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/api/ranking', (req, res) => res.json(topRanking()));
 app.get('/:arquivo', (req, res, next) => {
   if (ARQUIVOS_PUBLICOS.includes(req.params.arquivo)) {
     return res.sendFile(path.join(__dirname, req.params.arquivo));
@@ -21,111 +26,383 @@ app.get('/:arquivo', (req, res, next) => {
   next();
 });
 
-// codigo -> { chess, jogadores: { w: socketId, b: socketId } }
+/* ============================================================
+   RANKING (pontuação Elo, salvo em ranking.json)
+   Atenção: no Render gratuito o disco é apagado a cada novo deploy/reinício,
+   então o ranking recomeça do zero nessas horas.
+============================================================ */
+const ARQUIVO_RANKING = path.join(__dirname, 'ranking.json');
+let ranking = {};
+try {
+  ranking = JSON.parse(fs.readFileSync(ARQUIVO_RANKING, 'utf8'));
+} catch {
+  ranking = {};
+}
+
+let salvarTimer = null;
+function salvarRanking() {
+  clearTimeout(salvarTimer);
+  salvarTimer = setTimeout(() => {
+    fs.writeFile(ARQUIVO_RANKING, JSON.stringify(ranking), () => {});
+  }, 1000);
+}
+
+function fichaDe(jogador) {
+  if (!ranking[jogador.id]) ranking[jogador.id] = { nome: jogador.nome, elo: 1200, v: 0, d: 0, e: 0 };
+  ranking[jogador.id].nome = jogador.nome; // mantém o apelido mais recente
+  return ranking[jogador.id];
+}
+
+function topRanking() {
+  return Object.values(ranking)
+    .sort((a, b) => b.elo - a.elo)
+    .slice(0, 20)
+    .map(({ nome, elo, v, d, e }) => ({ nome, elo: Math.round(elo), v, d, e }));
+}
+
+function registrarNoRanking(sala, vencedor) {
+  const { w, b } = sala.jogadores;
+  if (!w || !b || w.id === b.id) return;
+  if (sala.chess.history().length < 4) return; // partidas curtas demais não contam
+  const fw = fichaDe(w);
+  const fb = fichaDe(b);
+  const esperadoW = 1 / (1 + 10 ** ((fb.elo - fw.elo) / 400));
+  const placarW = vencedor === 'w' ? 1 : vencedor === 'b' ? 0 : 0.5;
+  const K = 32;
+  fw.elo += K * (placarW - esperadoW);
+  fb.elo += K * ((1 - placarW) - (1 - esperadoW));
+  if (vencedor === 'w') { fw.v++; fb.d++; }
+  else if (vencedor === 'b') { fb.v++; fw.d++; }
+  else { fw.e++; fb.e++; }
+  salvarRanking();
+}
+
+/* ============================================================
+   SALAS
+============================================================ */
+// codigo -> {
+//   chess, jogadores: { w: {id, nome, socket, conectado, timerSaida} | null, b: ... },
+//   iniciada, encerrada, resultado, ofertaDe, revanche: Set,
+//   base, incremento, tempo: {w, b}, turnoInicio, timerTempo
+// }
 const salas = new Map();
 
 function gerarCodigo() {
   let codigo;
   do {
     codigo = Math.random().toString(36).slice(2, 6).toUpperCase();
-  } while (salas.has(codigo));
+  } while (codigo.length < 4 || salas.has(codigo));
   return codigo;
 }
 
+const limparNome = (n) => String(n || '').trim().slice(0, 16) || 'Jogador';
+const outra = (cor) => (cor === 'w' ? 'b' : 'w');
+
+// Tempo restante de cada lado agora (descontando o tempo do lance em andamento)
+function relogioAgora(sala) {
+  const rodando = sala.base > 0 && sala.iniciada && !sala.encerrada;
+  const tempo = { ...sala.tempo };
+  if (rodando) tempo[sala.chess.turn()] -= Date.now() - sala.turnoInicio;
+  return { w: Math.max(0, tempo.w), b: Math.max(0, tempo.b), vez: sala.chess.turn(), rodando, ligado: sala.base > 0 };
+}
+
+function infoJogadores(sala) {
+  const info = {};
+  for (const cor of ['w', 'b']) {
+    const j = sala.jogadores[cor];
+    info[cor] = j ? { nome: j.nome, conectado: j.conectado } : null;
+  }
+  return info;
+}
+
+// Estado completo, mandado a quem entra/reconecta
+function enviarSala(sala, codigo, cor) {
+  const j = sala.jogadores[cor];
+  if (!j || !j.socket) return;
+  io.to(j.socket).emit('sala', {
+    codigo,
+    cor,
+    historico: sala.chess.history(),
+    jogadores: infoJogadores(sala),
+    relogio: relogioAgora(sala),
+    iniciada: sala.iniciada,
+    encerrada: sala.encerrada,
+    resultado: sala.resultado,
+    base: sala.base,
+    incremento: sala.incremento,
+  });
+}
+
+function agendarTempo(sala, codigo) {
+  clearTimeout(sala.timerTempo);
+  if (!sala.base || !sala.iniciada || sala.encerrada) return;
+  const vez = sala.chess.turn();
+  const restante = sala.tempo[vez] - (Date.now() - sala.turnoInicio);
+  sala.timerTempo = setTimeout(() => {
+    if (sala.encerrada) return;
+    sala.tempo[vez] = 0;
+    finalizar(sala, codigo, { vencedor: outra(vez), motivo: 'tempo' });
+  }, Math.max(0, restante) + 50);
+}
+
+function finalizar(sala, codigo, resultado) {
+  if (sala.encerrada) return;
+  // congela o relógio de quem estava jogando
+  if (sala.base && sala.iniciada) {
+    const vez = sala.chess.turn();
+    sala.tempo[vez] = Math.max(0, sala.tempo[vez] - (Date.now() - sala.turnoInicio));
+  }
+  sala.encerrada = true;
+  sala.resultado = resultado;
+  sala.ofertaDe = null;
+  sala.revanche = new Set();
+  clearTimeout(sala.timerTempo);
+  registrarNoRanking(sala, resultado.vencedor);
+  io.to(codigo).emit('fim', { ...resultado, relogio: relogioAgora(sala), jogadores: infoJogadores(sala) });
+}
+
+function resultadoDoTabuleiro(chess) {
+  if (chess.isCheckmate()) return { vencedor: outra(chess.turn()), motivo: 'mate' };
+  if (chess.isStalemate()) return { vencedor: null, motivo: 'afogamento' };
+  if (chess.isThreefoldRepetition()) return { vencedor: null, motivo: 'repeticao' };
+  if (chess.isInsufficientMaterial()) return { vencedor: null, motivo: 'material' };
+  return { vencedor: null, motivo: 'empate' };
+}
+
+function comecarPartida(sala, codigo) {
+  sala.chess = new Chess();
+  sala.iniciada = true;
+  sala.encerrada = false;
+  sala.resultado = null;
+  sala.ofertaDe = null;
+  sala.revanche = new Set();
+  sala.tempo = { w: sala.base, b: sala.base };
+  sala.turnoInicio = Date.now();
+  agendarTempo(sala, codigo);
+}
+
+function apagarSala(codigo) {
+  const sala = salas.get(codigo);
+  if (!sala) return;
+  clearTimeout(sala.timerTempo);
+  for (const cor of ['w', 'b']) clearTimeout(sala.jogadores[cor]?.timerSaida);
+  salas.delete(codigo);
+}
+
+// Jogador saiu (de propósito ou caiu). "imediato" = clicou em Menu.
+function jogadorSaiu(socket, imediato) {
+  const codigo = socket.data.sala;
+  const sala = salas.get(codigo);
+  const cor = socket.data.cor;
+  socket.data.sala = null;
+  if (!sala || !cor) return;
+  const j = sala.jogadores[cor];
+  if (!j || j.socket !== socket.id) return; // já reconectou por outra aba
+  socket.leave(codigo);
+  j.conectado = false;
+  j.socket = null;
+
+  const desistir = () => {
+    if (sala.iniciada && !sala.encerrada) {
+      finalizar(sala, codigo, { vencedor: outra(cor), motivo: 'abandono' });
+    }
+    io.to(codigo).emit('oponente-saiu');
+    sala.jogadores[cor] = null;
+    if (!sala.jogadores[outra(cor)]?.conectado) apagarSala(codigo);
+  };
+
+  if (imediato) return desistir();
+
+  io.to(codigo).emit('oponente-desconectou', { segundos: ESPERA_RECONEXAO_MS / 1000 });
+  clearTimeout(j.timerSaida);
+  j.timerSaida = setTimeout(desistir, ESPERA_RECONEXAO_MS);
+}
+
+/* ============================================================
+   CONEXÕES
+============================================================ */
 io.on('connection', (socket) => {
-  socket.on('criar-sala', () => {
-    const codigo = gerarCodigo();
-    const cor = Math.random() < 0.5 ? 'w' : 'b';
-    salas.set(codigo, {
-      chess: new Chess(),
-      jogadores: { [cor]: socket.id },
-      encerrada: false, // true depois de desistência ou empate combinado
-      ofertaDe: null,   // cor de quem propôs empate (aguardando resposta)
-    });
-    socket.join(codigo);
-    socket.data.sala = codigo;
-    socket.data.cor = cor;
-    socket.emit('sala-criada', { codigo, cor });
+  let ultimaMsg = 0;
+
+  // id = jogador (para o ranking); sessao = aba do navegador (para reconectar)
+  const novoJogador = (id, sessao, nome) => ({
+    id: String(id || socket.id).slice(0, 64),
+    sessao: String(sessao || socket.id).slice(0, 64),
+    nome: limparNome(nome),
+    socket: socket.id,
+    conectado: true,
   });
 
-  socket.on('entrar-sala', (codigoBruto) => {
-    const codigo = String(codigoBruto || '').trim().toUpperCase();
-    const sala = salas.get(codigo);
-    if (!sala) return socket.emit('erro-sala', 'Sala não encontrada.');
-    if (sala.jogadores.w && sala.jogadores.b) {
-      return socket.emit('erro-sala', 'Essa sala já está cheia.');
-    }
-    const cor = sala.jogadores.w ? 'b' : 'w';
-    sala.jogadores[cor] = socket.id;
+  socket.on('criar-sala', ({ nome, id, sessao, minutos, incremento } = {}) => {
+    if (socket.data.sala) jogadorSaiu(socket, true);
+    const codigo = gerarCodigo();
+    const cor = Math.random() < 0.5 ? 'w' : 'b';
+    const min = [0, 1, 3, 5, 10, 15].includes(Number(minutos)) ? Number(minutos) : 0;
+    const inc = [0, 2, 5, 10].includes(Number(incremento)) ? Number(incremento) : 0;
+    const sala = {
+      chess: new Chess(),
+      jogadores: { w: null, b: null },
+      iniciada: false,
+      encerrada: false,
+      resultado: null,
+      ofertaDe: null,
+      revanche: new Set(),
+      base: min * 60_000,
+      incremento: min ? inc * 1000 : 0,
+      tempo: { w: min * 60_000, b: min * 60_000 },
+      turnoInicio: 0,
+      timerTempo: null,
+    };
+    sala.jogadores[cor] = novoJogador(id, sessao, nome);
+    salas.set(codigo, sala);
     socket.join(codigo);
     socket.data.sala = codigo;
     socket.data.cor = cor;
-    socket.emit('sala-entrada', { codigo, cor });
-    io.to(codigo).emit('inicio', { fen: sala.chess.fen() });
+    enviarSala(sala, codigo, cor);
+  });
+
+  // Serve tanto para entrar pela primeira vez quanto para reconectar
+  socket.on('entrar-sala', ({ codigo: codigoBruto, nome, id, sessao } = {}) => {
+    const codigo = String(codigoBruto || '').trim().toUpperCase();
+    const sala = salas.get(codigo);
+    if (!sala) return socket.emit('erro-sala', 'Sala não encontrada. Ela pode ter sido encerrada.');
+    const minhaSessao = String(sessao || socket.id).slice(0, 64);
+
+    if (socket.data.sala && socket.data.sala !== codigo) jogadorSaiu(socket, true);
+
+    // Reconexão: esta aba já tem um lugar nesta sala
+    let cor = ['w', 'b'].find((c) => sala.jogadores[c]?.sessao === minhaSessao);
+    if (cor) {
+      const j = sala.jogadores[cor];
+      if (j.socket && j.socket !== socket.id) io.sockets.sockets.get(j.socket)?.disconnect(true);
+      clearTimeout(j.timerSaida);
+      j.socket = socket.id;
+      j.conectado = true;
+      if (nome) j.nome = limparNome(nome);
+      socket.join(codigo);
+      socket.data.sala = codigo;
+      socket.data.cor = cor;
+      enviarSala(sala, codigo, cor);
+      socket.to(codigo).emit('oponente-voltou', { jogadores: infoJogadores(sala) });
+      return;
+    }
+
+    if (sala.iniciada) return socket.emit('erro-sala', 'Essa partida já começou.');
+    cor = !sala.jogadores.w ? 'w' : !sala.jogadores.b ? 'b' : null;
+    if (!cor) return socket.emit('erro-sala', 'Essa sala já está cheia.');
+    sala.jogadores[cor] = novoJogador(id, sessao, nome);
+    socket.join(codigo);
+    socket.data.sala = codigo;
+    socket.data.cor = cor;
+    if (!sala.iniciada && sala.jogadores.w && sala.jogadores.b) comecarPartida(sala, codigo);
+    enviarSala(sala, codigo, 'w');
+    enviarSala(sala, codigo, 'b');
   });
 
   socket.on('jogada', ({ from, to, promotion } = {}) => {
     const codigo = socket.data.sala;
     const sala = salas.get(codigo);
-    if (!sala || sala.encerrada || !(sala.jogadores.w && sala.jogadores.b)) return;
+    if (!sala || !sala.iniciada || sala.encerrada) return;
+    const cor = socket.data.cor;
 
-    // O servidor é quem manda: valida a vez e a legalidade da jogada.
     let jogada = null;
-    if (sala.chess.turn() === socket.data.cor) {
+    if (sala.chess.turn() === cor) {
+      // Conferir o relógio antes de aceitar o lance
+      if (sala.base) {
+        const gasto = Date.now() - sala.turnoInicio;
+        if (sala.tempo[cor] - gasto <= 0) {
+          sala.tempo[cor] = 0;
+          return finalizar(sala, codigo, { vencedor: outra(cor), motivo: 'tempo' });
+        }
+      }
       try {
         jogada = sala.chess.move({ from, to, promotion });
       } catch {
         jogada = null;
       }
+      if (jogada && sala.base) {
+        sala.tempo[cor] -= Date.now() - sala.turnoInicio;
+        sala.tempo[cor] += sala.incremento;
+        sala.turnoInicio = Date.now();
+      }
     }
+    if (jogada) sala.ofertaDe = null;
+
     io.to(codigo).emit('estado', {
-      fen: sala.chess.fen(),
+      historico: sala.chess.history(),
       ultima: jogada ? { from: jogada.from, to: jogada.to } : null,
+      relogio: relogioAgora(sala),
     });
+
+    if (jogada && sala.chess.isGameOver()) finalizar(sala, codigo, resultadoDoTabuleiro(sala.chess));
+    else agendarTempo(sala, codigo);
   });
 
-  // Só vale se a partida está em andamento (dois jogadores, sem fim ainda)
   function salaEmAndamento() {
     const sala = salas.get(socket.data.sala);
-    if (!sala || sala.encerrada || !(sala.jogadores.w && sala.jogadores.b)) return null;
-    if (sala.chess.isGameOver()) return null;
+    if (!sala || !sala.iniciada || sala.encerrada) return null;
     return sala;
   }
 
   socket.on('desistir', () => {
     const sala = salaEmAndamento();
     if (!sala) return;
-    sala.encerrada = true;
-    const vencedor = socket.data.cor === 'w' ? 'b' : 'w';
-    io.to(socket.data.sala).emit('fim', { motivo: 'desistencia', vencedor });
+    finalizar(sala, socket.data.sala, { vencedor: outra(socket.data.cor), motivo: 'desistencia' });
   });
 
   socket.on('propor-empate', () => {
     const sala = salaEmAndamento();
-    if (!sala || sala.ofertaDe) return; // já existe uma proposta aguardando
+    if (!sala || sala.ofertaDe) return;
     sala.ofertaDe = socket.data.cor;
     socket.to(socket.data.sala).emit('empate-proposto');
   });
 
   socket.on('responder-empate', (aceitou) => {
     const sala = salaEmAndamento();
-    // Só quem recebeu a proposta pode responder
     if (!sala || !sala.ofertaDe || sala.ofertaDe === socket.data.cor) return;
     sala.ofertaDe = null;
-    if (aceitou === true) {
-      sala.encerrada = true;
-      io.to(socket.data.sala).emit('fim', { motivo: 'empate', vencedor: null });
-    } else {
-      socket.to(socket.data.sala).emit('empate-recusado');
-    }
+    if (aceitou === true) finalizar(sala, socket.data.sala, { vencedor: null, motivo: 'acordo' });
+    else socket.to(socket.data.sala).emit('empate-recusado');
   });
 
-  socket.on('disconnect', () => {
+  socket.on('revanche', () => {
     const codigo = socket.data.sala;
-    if (!codigo) return;
-    socket.to(codigo).emit('oponente-saiu');
-    salas.delete(codigo);
+    const sala = salas.get(codigo);
+    if (!sala || !sala.encerrada) return;
+    if (!sala.jogadores.w?.conectado || !sala.jogadores.b?.conectado) {
+      return socket.emit('erro-sala', 'O oponente não está mais na sala.');
+    }
+    sala.revanche.add(socket.data.cor);
+    if (sala.revanche.size < 2) {
+      socket.to(codigo).emit('revanche-pedida');
+      return;
+    }
+    // Os dois aceitaram: troca as cores e recomeça
+    [sala.jogadores.w, sala.jogadores.b] = [sala.jogadores.b, sala.jogadores.w];
+    for (const cor of ['w', 'b']) {
+      const s = io.sockets.sockets.get(sala.jogadores[cor].socket);
+      if (s) s.data.cor = cor;
+    }
+    comecarPartida(sala, codigo);
+    enviarSala(sala, codigo, 'w');
+    enviarSala(sala, codigo, 'b');
   });
+
+  socket.on('chat', (textoBruto) => {
+    const codigo = socket.data.sala;
+    const sala = salas.get(codigo);
+    if (!sala) return;
+    const agora = Date.now();
+    if (agora - ultimaMsg < 400) return; // evita spam
+    ultimaMsg = agora;
+    const texto = String(textoBruto || '').trim().slice(0, 200);
+    if (!texto) return;
+    const j = sala.jogadores[socket.data.cor];
+    io.to(codigo).emit('chat', { nome: j?.nome || 'Jogador', cor: socket.data.cor, texto });
+  });
+
+  socket.on('sair-sala', () => jogadorSaiu(socket, true));
+  socket.on('disconnect', () => jogadorSaiu(socket, false));
 });
 
 const PORTA = process.env.PORT || 3000;

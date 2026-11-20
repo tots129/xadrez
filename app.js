@@ -3,17 +3,16 @@ import { Chess } from 'https://cdn.jsdelivr.net/npm/chess.js@1/+esm';
 /* ============================================================
    CONFIGURAÇÕES (mude aqui se quiser)
 ============================================================ */
-const ATRASO_BOT_MS = 2000;   // tempo que o bot "pensa" antes de jogar
+const ATRASO_BOT_MS = 2000;   // tempo que o bot "pensa" antes de jogar (sem relógio)
+const ATRASO_BOT_RELOGIO_MS = 600; // com relógio o bot joga mais rápido
 const ANIMACAO_MS = 300;      // duração da animação das peças
 const GIRO_MS = 700;          // duração do giro do tabuleiro
 const PAUSA_GIRO_MS = 400;    // pausa entre a jogada e o giro (modo local)
+const DICA_MS = 3500;         // quanto tempo a dica fica marcada
 
 /* ============================================================
-   ESTADO
+   PEÇAS (desenho próprio em SVG)
 ============================================================ */
-// Peças desenhadas em SVG (desenho próprio). Cada peça tem uma "forma" (silhueta) e "detalhes".
-// A forma é desenhada duas vezes: uma grossa (contorno) e outra por cima (preenchimento),
-// assim só o contorno externo aparece, sem linhas por dentro da peça.
 const BASE_SVG = '<rect x="11" y="34" width="23" height="5.5" rx="2.5"/>';
 const PECAS_SVG = {
   p: {
@@ -52,7 +51,6 @@ const PECAS_SVG = {
   },
 };
 
-// Devolve o desenho (SVG) da peça. A cor vem das classes "branca" / "preta" do elemento que a contém.
 function svgPeca(tipo) {
   const { forma, detalhe } = PECAS_SVG[tipo];
   return `<svg class="pc" viewBox="0 0 45 45" aria-hidden="true">` +
@@ -60,6 +58,30 @@ function svgPeca(tipo) {
     `<g class="detalhe">${detalhe}</g></svg>`;
 }
 
+/* ============================================================
+   PROBLEMAS DE XADREZ (todos conferidos com o motor)
+============================================================ */
+const PROBLEMAS = [
+  { fen: '6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1', n: 1, nome: 'Mate do corredor' },
+  { fen: 'r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 0 1', n: 1, nome: 'Mate do pastor' },
+  { fen: 'rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 1', n: 1, nome: 'Mate do louco' },
+  { fen: '6rk/6pp/8/6N1/8/8/8/6K1 w - - 0 1', n: 1, nome: 'Mate sufocado' },
+  { fen: '7k/8/6K1/8/8/8/8/Q7 w - - 0 1', n: 1, nome: 'Dama e rei' },
+  { fen: 'r5k1/8/8/8/8/8/5PPP/6K1 b - - 0 1', n: 1, nome: 'Corredor das pretas' },
+  { fen: 'rnbqkbnr/ppppp2p/5p2/6p1/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1', n: 1, nome: 'Abertura desastrosa' },
+  { fen: 'k7/8/1K6/8/8/8/8/7R w - - 0 1', n: 1, nome: 'Torre e rei' },
+  { fen: '5k2/5P2/5K2/8/8/8/8/7R w - - 0 1', n: 1, nome: 'Peão protegido' },
+  { fen: '4k3/R7/4K3/8/8/8/8/7R w - - 0 1', n: 1, nome: 'Duas torres' },
+  { fen: '7k/8/8/8/8/8/R7/1R4K1 w - - 0 1', n: 2, nome: 'Escada de torres' },
+  { fen: '1r5k/6pp/7N/8/2Q5/8/8/6K1 w - - 0 1', n: 2, nome: 'Mate de Philidor' },
+  { fen: 'kbK5/pp6/1P6/8/8/8/8/R7 w - - 0 1', n: 2, nome: 'O sacrifício de Morphy' },
+  { fen: 'r1b2k1r/ppp1bppp/8/1B1Q4/5q2/2P5/PPP2PPP/R3R1K1 w - - 1 1', n: 2, nome: 'Dama no sacrifício' },
+  { fen: 'r2qkb1r/pp2nppp/3p4/2pNN1B1/2BnP3/3P4/PPP2PPP/R2bK2R w KQkq - 1 1', n: 2, nome: 'Mate de Légal' },
+];
+
+/* ============================================================
+   ESTADO
+============================================================ */
 const INICIAL = { p: 8, n: 2, b: 2, r: 2, q: 1 };
 const PONTOS = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 const COLUNAS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
@@ -67,22 +89,190 @@ const NOMES_NIVEL = { 1: 'fácil', 2: 'médio', 3: 'difícil' };
 const NOMES_PECA = { q: 'Dama', r: 'Torre', b: 'Bispo', n: 'Cavalo' };
 const $ = (id) => document.getElementById(id);
 
+// localStorage pode falhar (aba anônima etc.), então tudo passa por aqui
+const guardar = {
+  ler(chave, padrao) {
+    try { const v = localStorage.getItem(chave); return v === null ? padrao : JSON.parse(v); } catch { return padrao; }
+  },
+  salvar(chave, valor) {
+    try { localStorage.setItem(chave, JSON.stringify(valor)); } catch { /* sem armazenamento */ }
+  },
+};
+
+let meuId = guardar.ler('xadrez-id', null);
+if (!meuId) {
+  meuId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  guardar.salvar('xadrez-id', meuId);
+}
+// Identifica esta aba (sobrevive a recarregar a página). Serve para reconectar à partida
+// sem confundir duas abas abertas no mesmo navegador.
+let minhaSessao = null;
+try { minhaSessao = sessionStorage.getItem('xadrez-sessao'); } catch { /* ok */ }
+if (!minhaSessao) {
+  minhaSessao = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  try { sessionStorage.setItem('xadrez-sessao', minhaSessao); } catch { /* ok */ }
+}
+
 let jogo = new Chess();
-let modo = null;          // 'bot' | 'local' | 'online'
-let minhaCor = 'w';       // 'w' ou 'b' (bot e online)
-let orientacao = 'w';     // lado que fica embaixo
-let selecionada = null;   // casa selecionada, ex.: 'e2'
-let destinos = [];        // jogadas possíveis da peça selecionada
-let ultima = null;        // última jogada { from, to }
-let ativo = false;        // partida em andamento?
-let pensando = false;     // bot está calculando?
+let modo = null;          // 'bot' | 'local' | 'online' | 'problema'
+let minhaCor = 'w';
+let orientacao = 'w';
+let selecionada = null;
+let destinos = [];
+let ultima = null;
+let dica = null;          // { from, to } marcada no tabuleiro
+let ativo = false;
+let pensando = false;
 let escolhendoPromocao = false;
-let empateEnviado = false; // online: já propus empate e aguardo resposta
-let girando = false;      // tabuleiro está girando (bloqueia cliques)
-let autoGiro = true;      // modo local: gira sozinho para o jogador da vez
-let partidaId = 0;        // evita o bot jogar numa partida antiga
+let empateEnviado = false;
+let girando = false;
+let autoGiro = true;
+let partidaId = 0;
 let nivel = 2;
 let socket = null;
+let fimExtra = null;      // fim que não vem do tabuleiro (tempo, desistência...)
+
+// Relógio. Bot/local: controlado aqui. Online: o servidor manda os valores.
+let relogio = { ligado: false, w: 0, b: 0, inc: 0, vez: 'w', desde: 0, rodando: false };
+
+// Online
+let salaAtual = null;
+let nomesOnline = { w: null, b: null };
+let revancheEnviada = false;
+
+// Problemas
+let problemaAtual = 0;
+let lancesRestantes = 0;
+let resolvidos = new Set(guardar.ler('xadrez-resolvidos', []));
+
+/* ============================================================
+   SONS (gerados na hora, sem arquivos)
+============================================================ */
+let somLigado = guardar.ler('xadrez-som', true);
+let audio = null;
+
+function bip(freq, dur, tipo = 'sine', vol = 0.2, atraso = 0) {
+  if (!somLigado) return;
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+    const t = audio.currentTime + atraso;
+    const osc = audio.createOscillator();
+    const g = audio.createGain();
+    osc.type = tipo;
+    osc.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(g).connect(audio.destination);
+    osc.start(t);
+    osc.stop(t + dur + 0.02);
+  } catch { /* navegador sem áudio */ }
+}
+
+const SONS = {
+  lance: () => { bip(330, 0.08, 'triangle', 0.3); bip(220, 0.06, 'sine', 0.15, 0.02); },
+  captura: () => { bip(260, 0.07, 'square', 0.12); bip(160, 0.12, 'triangle', 0.3, 0.04); },
+  xeque: () => { bip(880, 0.12, 'sine', 0.2); bip(660, 0.15, 'sine', 0.18, 0.1); },
+  inicio: () => { bip(523, 0.1, 'sine', 0.15); bip(784, 0.15, 'sine', 0.15, 0.1); },
+  vitoria: () => [523, 659, 784, 1047].forEach((f, i) => bip(f, 0.25, 'triangle', 0.2, i * 0.12)),
+  derrota: () => [392, 330, 262].forEach((f, i) => bip(f, 0.3, 'sine', 0.18, i * 0.18)),
+  empate: () => { bip(440, 0.2, 'sine', 0.15); bip(440, 0.2, 'sine', 0.15, 0.25); },
+  erro: () => bip(150, 0.2, 'sawtooth', 0.08),
+  msg: () => bip(1200, 0.06, 'sine', 0.12),
+  tic: () => bip(1000, 0.03, 'square', 0.05),
+};
+
+function somDoUltimoLance() {
+  const h = jogo.history({ verbose: true });
+  const m = h[h.length - 1];
+  if (!m) return;
+  if (jogo.inCheck() && !jogo.isCheckmate()) SONS.xeque();
+  else if (m.captured) SONS.captura();
+  else SONS.lance();
+}
+
+function atualizarBotaoSom() {
+  $('btn-som').textContent = somLigado ? '🔊' : '🔇';
+  $('btn-som').title = somLigado ? 'Desligar sons' : 'Ligar sons';
+}
+$('btn-som').onclick = () => {
+  somLigado = !somLigado;
+  guardar.salvar('xadrez-som', somLigado);
+  atualizarBotaoSom();
+  SONS.lance();
+};
+
+/* ============================================================
+   TEMAS DO TABULEIRO
+============================================================ */
+function aplicarTema(tema) {
+  document.body.dataset.tema = tema;
+  $('tema').value = tema;
+  guardar.salvar('xadrez-tema', tema);
+}
+$('tema').onchange = () => aplicarTema($('tema').value);
+
+/* ============================================================
+   CONFETE
+============================================================ */
+function confete() {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'confete';
+  document.body.appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+  const W = (canvas.width = innerWidth);
+  const H = (canvas.height = innerHeight);
+  const cores = ['#ffd76a', '#5fb35a', '#4fa3ff', '#ff6b6b', '#c77dff', '#ffffff'];
+  const pedacos = Array.from({ length: 160 }, () => ({
+    x: W / 2 + (Math.random() - 0.5) * W * 0.3,
+    y: H * 0.35,
+    vx: (Math.random() - 0.5) * 16,
+    vy: -Math.random() * 15 - 4,
+    r: Math.random() * Math.PI,
+    vr: (Math.random() - 0.5) * 0.4,
+    w: 6 + Math.random() * 6,
+    h: 8 + Math.random() * 8,
+    cor: cores[Math.floor(Math.random() * cores.length)],
+  }));
+  const inicio = performance.now();
+  function quadro(agora) {
+    const t = agora - inicio;
+    ctx.clearRect(0, 0, W, H);
+    for (const p of pedacos) {
+      p.vy += 0.35;
+      p.vx *= 0.99;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.r += p.vr;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - t / 3500);
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.r);
+      ctx.fillStyle = p.cor;
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    }
+    if (t < 3500) requestAnimationFrame(quadro);
+    else canvas.remove();
+  }
+  requestAnimationFrame(quadro);
+}
+
+/* ============================================================
+   APELIDO
+============================================================ */
+$('apelido').value = guardar.ler('xadrez-nome', '');
+$('apelido').oninput = () => guardar.salvar('xadrez-nome', $('apelido').value.trim());
+function meuNome() {
+  let nome = $('apelido').value.trim();
+  if (!nome) {
+    nome = 'Jogador' + Math.floor(100 + Math.random() * 900);
+    $('apelido').value = nome;
+    guardar.salvar('xadrez-nome', nome);
+  }
+  return nome.slice(0, 16);
+}
 
 /* ============================================================
    TELAS E MENU
@@ -92,26 +282,42 @@ function mostrar(tela) {
   $('jogo').hidden = tela !== 'jogo';
 }
 
+function escolherModo(m) {
+  document.querySelectorAll('[data-modo]').forEach((b) => b.classList.toggle('ativo', b.dataset.modo === m));
+  $('opcoes-bot').hidden = m !== 'bot';
+  $('opcoes-local').hidden = m !== 'local';
+  $('opcoes-online').hidden = m !== 'online';
+  $('opcoes-problema').hidden = m !== 'problema';
+  if (m === 'problema') atualizarProgressoProblemas();
+}
 document.querySelectorAll('[data-modo]').forEach((botao) => {
-  botao.onclick = () => {
-    const m = botao.dataset.modo;
-    document.querySelectorAll('[data-modo]').forEach((b) => b.classList.toggle('ativo', b === botao));
-    $('opcoes-bot').hidden = m !== 'bot';
-    $('opcoes-online').hidden = m !== 'online';
-    if (m === 'local') iniciarLocal();
-  };
+  botao.onclick = () => escolherModo(botao.dataset.modo);
 });
 
 $('btn-iniciar-bot').onclick = iniciarBot;
-$('btn-criar').onclick = () => conectar().emit('criar-sala');
+$('btn-iniciar-local').onclick = iniciarLocal;
+$('btn-iniciar-problema').onclick = () => {
+  const proximo = PROBLEMAS.findIndex((_, i) => !resolvidos.has(i));
+  iniciarProblema(proximo === -1 ? 0 : proximo);
+};
+$('btn-criar').onclick = () => {
+  const [minutos, incremento] = $('relogio-online').value.split('+').map(Number);
+  salaAtual = null;
+  conectar().emit('criar-sala', { nome: meuNome(), id: meuId, sessao: minhaSessao, minutos, incremento });
+};
 $('btn-entrar').onclick = () => {
-  const codigo = $('codigo').value.trim();
-  if (codigo) conectar().emit('entrar-sala', codigo);
+  const codigo = $('codigo').value.trim().toUpperCase();
+  if (codigo) entrarNaSala(codigo);
 };
-$('btn-novo').onclick = () => (modo === 'bot' ? iniciarBot() : iniciarLocal());
-$('btn-girar').onclick = () => {
-  if (!girando) girarAnimado();
+$('codigo').onkeydown = (e) => { if (e.key === 'Enter') $('btn-entrar').click(); };
+
+$('btn-novo').onclick = () => {
+  if (modo === 'bot') iniciarBot();
+  else if (modo === 'local') iniciarLocal();
+  else if (modo === 'problema') iniciarProblema(problemaAtual);
 };
+$('btn-proximo').onclick = () => iniciarProblema((problemaAtual + 1) % PROBLEMAS.length);
+$('btn-girar').onclick = () => { if (!girando) girarAnimado(); };
 $('btn-auto').onclick = () => {
   autoGiro = !autoGiro;
   atualizarBotaoAuto();
@@ -122,30 +328,58 @@ function atualizarBotaoAuto() {
 }
 $('btn-menu').onclick = voltarAoMenu;
 $('btn-desistir').onclick = async () => {
-  if (modo !== 'online' || !ativo) return;
+  if (!ativo || jogo.isGameOver()) return;
   const r = await perguntar('Tem certeza que quer desistir?', 'Desistir', 'Continuar jogando');
-  if (r && ativo) socket.emit('desistir');
+  if (!r || !ativo) return;
+  if (modo === 'online') socket.emit('desistir');
+  else if (modo === 'bot') terminar(`Você desistiu. ${nomeDaCor(oposta(minhaCor))} venceram.`, oposta(minhaCor));
 };
 $('btn-empate').onclick = () => {
   if (modo !== 'online' || !ativo || empateEnviado) return;
   empateEnviado = true;
   socket.emit('propor-empate');
   avisar('Proposta de empate enviada. Aguardando resposta...');
-  atualizarBotoesOnline();
+  atualizarBotoes();
+};
+$('btn-revanche').onclick = () => {
+  if (modo !== 'online' || revancheEnviada) return;
+  revancheEnviada = true;
+  socket.emit('revanche');
+  avisar('Pedido de revanche enviado!');
+  atualizarBotoes();
 };
 $('btn-desfazer').onclick = desfazer;
+$('btn-dica').onclick = mostrarDica;
+
+$('btn-copiar').onclick = async () => {
+  const link = linkDaSala();
+  try {
+    if (navigator.share && matchMedia('(pointer: coarse)').matches) {
+      await navigator.share({ title: 'Xadrez', text: 'Bora jogar xadrez comigo!', url: link });
+      return;
+    }
+    await navigator.clipboard.writeText(link);
+    avisar('Link copiado! Mande para seu amigo. 📋');
+  } catch {
+    prompt('Copie o link:', link);
+  }
+};
 
 function voltarAoMenu() {
   fecharDialogo();
-  empateEnviado = false;
   if (socket) {
+    socket.emit('sair-sala');
     socket.disconnect();
     socket = null;
   }
+  salaAtual = null;
+  try { sessionStorage.removeItem('xadrez-sala'); } catch { /* ok */ }
+  history.replaceState(null, '', location.pathname);
   partidaId++;
   ativo = false;
   pensando = false;
   girando = false;
+  relogio.rodando = false;
   mostrar('menu');
 }
 
@@ -153,16 +387,25 @@ function prepararTelaDeJogo() {
   selecionada = null;
   destinos = [];
   ultima = null;
+  dica = null;
   pensando = false;
   girando = false;
   empateEnviado = false;
+  revancheEnviada = false;
+  fimExtra = null;
   partidaId++;
   $('btn-auto').hidden = modo !== 'local';
+  $('btn-girar').hidden = modo === 'problema';
   atualizarBotaoAuto();
-  $('btn-novo').hidden = modo === 'online';
-  $('btn-desfazer').hidden = modo === 'online';
   $('info').textContent = '';
+  $('convite').hidden = true;
+  $('chat').hidden = modo !== 'online';
   mostrar('jogo');
+}
+
+function iniciarRelogio(valor) {
+  const [min, inc] = String(valor || '0+0').split('+').map(Number);
+  relogio = { ligado: min > 0, w: min * 60000, b: min * 60000, inc: (inc || 0) * 1000, vez: 'w', desde: performance.now(), rodando: min > 0 };
 }
 
 /* ============================================================
@@ -174,31 +417,52 @@ function iniciarLocal() {
   orientacao = 'w';
   ativo = true;
   prepararTelaDeJogo();
-  $('info').textContent = 'Dois jogadores no mesmo computador. O tabuleiro gira a cada jogada.';
+  iniciarRelogio($('relogio-local').value);
+  $('info').textContent = 'Dois jogadores no mesmo aparelho. O tabuleiro gira a cada jogada.';
+  SONS.inicio();
   renderizar();
   atualizarStatus();
 }
 
 function iniciarBot() {
   modo = 'bot';
-  minhaCor = $('cor-bot').value;
+  minhaCor = $('cor-bot').value === 'aleatorio' ? (Math.random() < 0.5 ? 'w' : 'b') : $('cor-bot').value;
   nivel = Number($('nivel-bot').value);
   orientacao = minhaCor;
   jogo = new Chess();
   ativo = true;
   prepararTelaDeJogo();
+  iniciarRelogio($('relogio-bot').value);
   $('info').textContent = `Você joga de ${minhaCor === 'w' ? 'brancas' : 'pretas'}.`;
+  SONS.inicio();
   renderizar();
   atualizarStatus();
   if (jogo.turn() !== minhaCor) jogarBot();
 }
 
-/* ============================================================
-   TABULEIRO (desenho, animação e cliques)
-============================================================ */
+function iniciarProblema(i) {
+  modo = 'problema';
+  problemaAtual = i;
+  const p = PROBLEMAS[i];
+  jogo = new Chess(p.fen);
+  minhaCor = jogo.turn();
+  orientacao = minhaCor;
+  lancesRestantes = p.n;
+  ativo = true;
+  prepararTelaDeJogo();
+  relogio = { ligado: false, rodando: false };
+  $('info').textContent = `Problema ${i + 1} de ${PROBLEMAS.length}: ${p.nome} ${resolvidos.has(i) ? '✅' : ''}`;
+  renderizar();
+  atualizarStatus();
+}
 
-// Lista de peças que precisam deslizar depois de um lance (inclui a torre no roque).
-// Chame DEPOIS de aplicar o lance em "jogo".
+function atualizarProgressoProblemas() {
+  $('progresso-problemas').textContent = `${resolvidos.size} de ${PROBLEMAS.length} resolvidos`;
+}
+
+/* ============================================================
+   TABULEIRO
+============================================================ */
 function animacoesDoLance(from, to) {
   const lista = [{ from, to }];
   const p = jogo.get(to);
@@ -212,15 +476,12 @@ function animacoesDoLance(from, to) {
 
 function renderizar(animacoes = []) {
   const tab = $('tabuleiro');
-
-  // Guarda onde cada peça estava ANTES de redesenhar
   const origens = animacoes.map((a) => {
     const el = tab.querySelector(`[data-casa="${a.from}"]`);
     return el ? el.getBoundingClientRect() : null;
   });
 
   tab.innerHTML = '';
-
   const linhas = orientacao === 'w' ? [8, 7, 6, 5, 4, 3, 2, 1] : [1, 2, 3, 4, 5, 6, 7, 8];
   const colunas = orientacao === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0];
   const emXeque = jogo.inCheck() ? jogo.turn() : null;
@@ -235,6 +496,7 @@ function renderizar(animacoes = []) {
       const peca = jogo.get(casa);
       if (casa === selecionada) div.classList.add('selecionada');
       if (ultima && (casa === ultima.from || casa === ultima.to)) div.classList.add('ultima');
+      if (dica && (casa === dica.from || casa === dica.to)) div.classList.add('dica');
       if (peca && peca.type === 'k' && peca.color === emXeque) div.classList.add('xeque');
 
       const destino = destinos.find((m) => m.to === casa);
@@ -250,7 +512,6 @@ function renderizar(animacoes = []) {
         div.appendChild(span);
       }
 
-      // Coordenadas nas bordas
       if (c === colunas[0]) div.appendChild(coordenada(String(r), 'rank'));
       if (r === linhas[7]) div.appendChild(coordenada(COLUNAS[c], 'file'));
 
@@ -259,7 +520,6 @@ function renderizar(animacoes = []) {
     }
   }
 
-  // Animação: a peça nasce na casa de origem e desliza até a casa de destino
   animacoes.forEach((a, i) => {
     const de = origens[i];
     const peca = tab.querySelector(`[data-casa="${a.to}"] .peca`);
@@ -268,7 +528,7 @@ function renderizar(animacoes = []) {
     peca.style.transition = 'none';
     peca.style.zIndex = '20';
     peca.style.transform = `translate(${de.left - para.left}px, ${de.top - para.top}px)`;
-    peca.getBoundingClientRect(); // força o navegador a aplicar o ponto de partida
+    peca.getBoundingClientRect();
     peca.style.transition = `transform ${ANIMACAO_MS}ms cubic-bezier(0.22, 0.8, 0.3, 1)`;
     peca.style.transform = 'translate(0, 0)';
     setTimeout(() => {
@@ -281,14 +541,11 @@ function renderizar(animacoes = []) {
   atualizarJogadores();
 }
 
-// Gira o tabuleiro 180° com animação. As peças giram ao contrário para ficarem de pé;
-// no fim, o tabuleiro é redesenhado já virado para o outro lado.
 function girarAnimado() {
   const id = partidaId;
   const tab = $('tabuleiro');
   girando = true;
   const opcoes = { duration: GIRO_MS, easing: 'cubic-bezier(0.65, 0, 0.35, 1)', fill: 'forwards' };
-  // Encolhe no meio do giro para os cantos não passarem por cima do resto da tela
   const giro = tab.animate(
     [
       { transform: 'rotate(0deg) scale(1)' },
@@ -315,15 +572,14 @@ function girarAnimado() {
   });
 }
 
-// Modo local: depois de cada jogada, vira o tabuleiro para quem joga agora
 async function girarParaProximoJogador(pausa) {
-  if (modo !== 'local' || !autoGiro || jogo.isGameOver() || orientacao === jogo.turn()) return;
+  if (modo !== 'local' || !autoGiro || !ativo || jogo.isGameOver() || orientacao === jogo.turn()) return;
   const id = partidaId;
-  girando = true; // bloqueia cliques durante a pausa e o giro
+  girando = true;
   await new Promise((r) => setTimeout(r, pausa));
   if (id !== partidaId) return;
   if (!autoGiro) {
-    girando = false; // o jogador desligou o giro automático durante a pausa
+    girando = false;
     return;
   }
   await girarAnimado();
@@ -336,13 +592,21 @@ function coordenada(texto, tipo) {
   return s;
 }
 
+const oposta = (cor) => (cor === 'w' ? 'b' : 'w');
+const nomeDaCor = (cor) => (cor === 'w' ? 'Brancas' : 'Pretas');
+
 function nomeDoJogador(cor) {
-  if (modo === 'bot') return cor === minhaCor ? 'Você' : `Bot (${NOMES_NIVEL[nivel]})`;
-  if (modo === 'online') return cor === minhaCor ? 'Você' : 'Oponente';
-  return cor === 'w' ? 'Brancas' : 'Pretas';
+  const eu = $('apelido').value.trim() || 'Você';
+  if (modo === 'bot') return cor === minhaCor ? eu : `🤖 Bot (${NOMES_NIVEL[nivel]})`;
+  if (modo === 'online') {
+    const vazio = jogo.history().length || fimExtra ? 'Saiu da sala' : 'Aguardando...';
+    const n = nomesOnline[cor]?.nome || (cor === minhaCor ? eu : vazio);
+    return cor === minhaCor ? `${n} (você)` : n;
+  }
+  if (modo === 'problema') return cor === minhaCor ? eu : 'Defesa';
+  return nomeDaCor(cor);
 }
 
-// Conta o que cada lado perdeu olhando o tabuleiro (funciona em todos os modos, inclusive online).
 function analisarMaterial() {
   const cont = { w: { p: 0, n: 0, b: 0, r: 0, q: 0 }, b: { p: 0, n: 0, b: 0, r: 0, q: 0 } };
   for (const linha of jogo.board()) {
@@ -364,13 +628,26 @@ function analisarMaterial() {
   return res;
 }
 
-function atualizarBotoesOnline() {
+function emAndamento() {
+  return ativo && !jogo.isGameOver();
+}
+
+function atualizarBotoes() {
   const online = modo === 'online';
-  const podeAgir = online && ativo && !jogo.isGameOver();
-  $('btn-desistir').hidden = !online;
+  const terminou = !emAndamento();
+  $('btn-novo').hidden = online;
+  $('btn-novo').textContent = modo === 'problema' ? '↻ Tentar de novo' : '↻ Novo jogo';
+  $('btn-proximo').hidden = modo !== 'problema';
+  $('btn-desfazer').hidden = online || modo === 'problema';
+  $('btn-dica').hidden = online;
+  $('btn-dica').disabled = terminou || pensando;
+  $('btn-desistir').hidden = !(online || modo === 'bot');
+  $('btn-desistir').disabled = terminou;
   $('btn-empate').hidden = !online;
-  $('btn-desistir').disabled = !podeAgir;
-  $('btn-empate').disabled = !podeAgir || empateEnviado;
+  $('btn-empate').disabled = terminou || empateEnviado;
+  const podeRevanche = online && salaAtual && terminou && nomesOnline.w && nomesOnline.b && jogo.history().length + (fimExtra ? 1 : 0) > 0;
+  $('btn-revanche').hidden = !podeRevanche;
+  $('btn-revanche').disabled = revancheEnviada;
 }
 
 function atualizarJogadores() {
@@ -378,30 +655,92 @@ function atualizarJogadores() {
   const material = analisarMaterial();
   for (const [id, cor] of [['jog-topo', topo], ['jog-base', orientacao]]) {
     const el = $(id);
-    const oposta = cor === 'w' ? 'b' : 'w';
+    const op = oposta(cor);
     el.dataset.cor = cor;
     el.dataset.modo = modo;
     el.dataset.bot = modo === 'bot' && cor !== minhaCor ? '1' : '0';
     el.querySelector('.nome').textContent = nomeDoJogador(cor);
-    el.classList.toggle('vez', ativo && !jogo.isGameOver() && jogo.turn() === cor);
-
-    // Peças que este jogador já capturou (são as que faltam no lado oposto)
-    el.querySelector('.capturadas').innerHTML = material[oposta].perdidas
-      .map((t) => `<span class="peca mini ${oposta === 'w' ? 'branca' : 'preta'}">${svgPeca(t)}</span>`)
+    el.classList.toggle('vez', emAndamento() && jogo.turn() === cor);
+    el.classList.toggle('offline', modo === 'online' && nomesOnline[cor] && !nomesOnline[cor].conectado);
+    el.querySelector('.capturadas').innerHTML = material[op].perdidas
+      .map((t) => `<span class="peca mini ${op === 'w' ? 'branca' : 'preta'}">${svgPeca(t)}</span>`)
       .join('');
-    const vantagem = material[cor].pontos - material[oposta].pontos;
+    const vantagem = material[cor].pontos - material[op].pontos;
     el.querySelector('.vantagem').textContent = vantagem > 0 ? `+${vantagem}` : '';
   }
-  atualizarBotoesOnline();
+  desenharRelogios();
+  atualizarBotoes();
 }
+
+/* ============================================================
+   RELÓGIO
+============================================================ */
+function tempoDe(cor) {
+  if (!relogio.ligado) return null;
+  let t = relogio[cor];
+  if (relogio.rodando && relogio.vez === cor) t -= performance.now() - relogio.desde;
+  return Math.max(0, t);
+}
+
+function formatarTempo(ms) {
+  const s = Math.ceil(ms / 1000);
+  if (ms < 10000) return (ms / 1000).toFixed(1);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+let ultimoTic = 0;
+function desenharRelogios() {
+  for (const id of ['jog-topo', 'jog-base']) {
+    const el = $(id);
+    const span = el.querySelector('.relogio');
+    const t = tempoDe(el.dataset.cor);
+    span.hidden = t === null;
+    if (t === null) continue;
+    span.textContent = formatarTempo(t);
+    span.classList.toggle('pouco', t < 20000);
+    span.classList.toggle('correndo', relogio.rodando && relogio.vez === el.dataset.cor);
+  }
+}
+
+// Depois de um lance (bot/local): desconta o tempo de quem jogou e passa a vez
+function trocarRelogio() {
+  if (!relogio.ligado || !relogio.rodando) return;
+  const agora = performance.now();
+  const quem = relogio.vez;
+  relogio[quem] = Math.max(0, relogio[quem] - (agora - relogio.desde)) + relogio.inc;
+  relogio.vez = jogo.turn();
+  relogio.desde = agora;
+}
+
+function pararRelogio() {
+  if (!relogio.ligado || !relogio.rodando) return;
+  relogio[relogio.vez] = tempoDe(relogio.vez);
+  relogio.rodando = false;
+}
+
+setInterval(() => {
+  if (!relogio.ligado || $('jogo').hidden) return;
+  desenharRelogios();
+  if (!relogio.rodando || !ativo) return;
+  const t = tempoDe(relogio.vez);
+  // tique-taque nos últimos 10 segundos de quem está jogando aqui
+  const souEu = modo === 'local' || relogio.vez === minhaCor;
+  if (souEu && t < 10000 && t > 0 && Math.ceil(t / 1000) !== ultimoTic) {
+    ultimoTic = Math.ceil(t / 1000);
+    SONS.tic();
+  }
+  if (t <= 0 && modo !== 'online') {
+    const perdeu = relogio.vez;
+    terminar(`Tempo esgotado! ${nomeDaCor(oposta(perdeu))} venceram. ⏰`, oposta(perdeu));
+  }
+}, 100);
 
 /* ---------- Janelas de pergunta e avisos ---------- */
 let fecharDialogo = () => {};
 
-// Mostra uma pergunta com dois botões. Devolve true/false, ou null se for cancelada de fora.
 function perguntar(texto, textoSim, textoNao) {
   return new Promise((resolve) => {
-    fecharDialogo(); // se já havia uma aberta, cancela
+    fecharDialogo();
     $('dialogo-texto').textContent = texto;
     $('dialogo-sim').textContent = textoSim;
     $('dialogo-nao').textContent = textoNao;
@@ -430,10 +769,12 @@ function minhaVez() {
   return modo === 'local' || jogo.turn() === minhaCor;
 }
 
+/* ============================================================
+   JOGADAS
+============================================================ */
 async function aoClicar(casa) {
   if (!ativo || pensando || girando || escolhendoPromocao || jogo.isGameOver() || !minhaVez()) return;
 
-  // Já tem peça selecionada e clicou num destino válido → joga
   if (selecionada) {
     const alvo = destinos.filter((m) => m.to === casa);
     if (alvo.length) {
@@ -447,7 +788,6 @@ async function aoClicar(casa) {
     }
   }
 
-  // Senão, tenta selecionar uma peça da vez
   const peca = jogo.get(casa);
   if (peca && peca.color === jogo.turn()) {
     selecionada = casa;
@@ -459,7 +799,6 @@ async function aoClicar(casa) {
   renderizar();
 }
 
-// Janelinha bonita para escolher a peça da promoção (devolve 'q', 'r', 'b' ou 'n')
 function pedirPromocao(cor) {
   return new Promise((resolve) => {
     const lista = $('promo-opcoes');
@@ -484,53 +823,103 @@ function executar(from, to, promotion) {
   ultima = { from: r.from, to: r.to };
   selecionada = null;
   destinos = [];
+  dica = null;
 
   if (modo === 'online') socket.emit('jogada', { from, to, promotion });
+  else trocarRelogio();
 
   renderizar(animacoesDoLance(r.from, r.to));
+  somDoUltimoLance();
+
+  if (modo === 'problema') return conferirProblema();
+
   atualizarStatus();
   if (modo === 'bot' && !jogo.isGameOver()) jogarBot();
   if (modo === 'local') girarParaProximoJogador(ANIMACAO_MS + PAUSA_GIRO_MS);
 }
 
 function desfazer() {
-  if (pensando || girando || modo === 'online') return;
+  if (pensando || girando || modo === 'online' || modo === 'problema' || !ativo) return;
+  if (jogo.history().length === 0) return;
   jogo.undo();
-  if (modo === 'bot' && jogo.turn() !== minhaCor) jogo.undo(); // desfaz a jogada do bot também
+  if (modo === 'bot' && jogo.turn() !== minhaCor) jogo.undo();
   ultima = null;
   selecionada = null;
   destinos = [];
+  dica = null;
+  if (relogio.ligado) {
+    relogio.vez = jogo.turn();
+    relogio.desde = performance.now();
+  }
   renderizar();
   atualizarStatus();
   if (modo === 'bot' && !jogo.isGameOver() && jogo.turn() !== minhaCor) jogarBot();
   if (modo === 'local') girarParaProximoJogador(150);
 }
 
+// Fim por motivo de fora do tabuleiro (tempo, desistência). vencedor = 'w' | 'b' | null
+function terminar(texto, vencedor) {
+  ativo = false;
+  pararRelogio();
+  fimExtra = texto;
+  fecharDialogo();
+  atualizarStatus();
+  comemorar(vencedor);
+}
+
+function comemorar(vencedor) {
+  const euVenci = modo === 'local' ? vencedor !== null : vencedor === minhaCor;
+  if (vencedor === null) SONS.empate();
+  else if (euVenci) {
+    SONS.vitoria();
+    confete();
+  } else SONS.derrota();
+}
+
 function atualizarStatus() {
   const vez = jogo.turn() === 'w' ? 'brancas' : 'pretas';
-  const vencedor = jogo.turn() === 'w' ? 'Pretas' : 'Brancas';
   let texto;
+  let fim = false;
 
-  if (jogo.isCheckmate()) texto = `Xeque-mate! ${vencedor} venceram. 🏆`;
-  else if (jogo.isStalemate()) texto = 'Empate por afogamento.';
-  else if (jogo.isThreefoldRepetition()) texto = 'Empate por repetição de posição.';
-  else if (jogo.isInsufficientMaterial()) texto = 'Empate por material insuficiente.';
-  else if (jogo.isDraw()) texto = 'Empate.';
-  else {
+  if (fimExtra) {
+    texto = fimExtra;
+    fim = true;
+  } else if (jogo.isCheckmate()) {
+    const vencedor = oposta(jogo.turn());
+    if (modo === 'bot' || modo === 'online') texto = vencedor === minhaCor ? 'Xeque-mate! Você venceu! 🏆' : `Xeque-mate! ${nomeDoJogador(vencedor)} venceu.`;
+    else texto = `Xeque-mate! ${nomeDaCor(vencedor)} venceram. 🏆`;
+    fim = true;
+  } else if (jogo.isStalemate()) { texto = 'Empate por afogamento.'; fim = true; }
+  else if (jogo.isThreefoldRepetition()) { texto = 'Empate por repetição de posição.'; fim = true; }
+  else if (jogo.isInsufficientMaterial()) { texto = 'Empate por material insuficiente.'; fim = true; }
+  else if (jogo.isDraw()) { texto = 'Empate.'; fim = true; }
+  else if (modo === 'problema') {
+    texto = `${nomeDaCor(minhaCor)} jogam e dão mate em ${lancesRestantes}.`;
+  } else if (modo === 'online' && !ativo) {
+    texto = 'Aguardando o oponente entrar...';
+  } else if (modo === 'online') {
+    texto = jogo.turn() === minhaCor ? 'Sua vez!' + (jogo.inCheck() ? ' Xeque!' : '') : 'Aguardando o oponente...';
+  } else {
     texto = `Vez das ${vez}.` + (jogo.inCheck() ? ' Xeque!' : '');
-    if (modo === 'online' && jogo.turn() === minhaCor) texto = 'Sua vez! ' + (jogo.inCheck() ? 'Xeque!' : '');
-    if (modo === 'online' && jogo.turn() !== minhaCor) texto = 'Aguardando o oponente...';
   }
+
+  // Fim de jogo pelo tabuleiro nos modos locais: para o relógio e comemora uma vez
+  if (fim && !fimExtra && ativo && modo !== 'online' && modo !== 'problema') {
+    ativo = false;
+    pararRelogio();
+    comemorar(jogo.isCheckmate() ? oposta(jogo.turn()) : null);
+  }
+
   $('status').textContent = texto;
-  $('status').className = jogo.isGameOver() ? 'fim' : '';
+  $('status').className = fim ? 'fim' : '';
   atualizarHistorico();
   atualizarJogadores();
 }
 
 function atualizarHistorico() {
   const el = $('historico');
-  const lances = modo === 'online' ? [] : jogo.history(); // online reconstrói o jogo a cada lance
-  el.hidden = lances.length === 0;
+  const lances = jogo.history();
+  el.hidden = lances.length === 0 || modo === 'problema';
   let html = '';
   for (let i = 0; i < lances.length; i += 2) {
     html += `<span class="n">${i / 2 + 1}.</span><span class="l">${lances[i]}</span>`;
@@ -541,11 +930,113 @@ function atualizarHistorico() {
 }
 
 /* ============================================================
+   DICA
+============================================================ */
+function mostrarDica() {
+  if (!emAndamento() || pensando || girando || !minhaVez() || modo === 'online') return;
+  $('status').textContent = 'Procurando uma boa jogada... 💡';
+  $('status').className = 'pensando';
+  setTimeout(() => {
+    const copia = new Chess(jogo.fen());
+    let san;
+    if (modo === 'problema') san = copia.moves().find((m) => { copia.move(m); const ok = copia.isCheckmate() || (lancesRestantes > 1 && defesaPerde(copia, lancesRestantes - 1)); copia.undo(); return ok; });
+    else san = escolherJogadaDoBot(copia, 3);
+    if (!san) return atualizarStatus();
+    const m = copia.move(san);
+    dica = { from: m.from, to: m.to };
+    const id = partidaId;
+    atualizarStatus();
+    renderizar();
+    avisar(`💡 Dica: ${m.san}`);
+    setTimeout(() => {
+      if (id === partidaId && dica && dica.from === m.from) {
+        dica = null;
+        renderizar();
+      }
+    }, DICA_MS);
+  }, 30);
+}
+
+/* ============================================================
+   PROBLEMAS
+============================================================ */
+// O lado da vez consegue dar mate em até n lances, não importa a defesa?
+function mateEm(g, n) {
+  for (const m of g.moves()) {
+    g.move(m);
+    const ok = g.isCheckmate() || (n > 1 && !g.isGameOver() && defesaPerde(g, n - 1));
+    g.undo();
+    if (ok) return true;
+  }
+  return false;
+}
+// Quem defende (lado da vez) leva mate em n, qualquer que seja a resposta?
+function defesaPerde(g, n) {
+  if (g.isGameOver()) return false;
+  return g.moves().every((r) => {
+    g.move(r);
+    const x = mateEm(g, n);
+    g.undo();
+    return x;
+  });
+}
+
+function conferirProblema() {
+  const id = partidaId;
+  if (jogo.isCheckmate()) {
+    ativo = false;
+    resolvidos.add(problemaAtual);
+    guardar.salvar('xadrez-resolvidos', [...resolvidos]);
+    $('status').textContent = 'Resolvido! Muito bem! ✅';
+    $('status').className = 'fim';
+    $('info').textContent = `Problema ${problemaAtual + 1} de ${PROBLEMAS.length}: ${PROBLEMAS[problemaAtual].nome} ✅`;
+    SONS.vitoria();
+    confete();
+    atualizarJogadores();
+    return;
+  }
+
+  const copia = new Chess(jogo.fen());
+  if (lancesRestantes > 1 && defesaPerde(copia, lancesRestantes - 1)) {
+    // Lance certo! A defesa responde com qualquer lance (todos perdem)
+    lancesRestantes--;
+    pensando = true;
+    $('status').textContent = 'Boa! Agora a defesa responde...';
+    $('status').className = 'pensando';
+    setTimeout(() => {
+      if (id !== partidaId) return;
+      const respostas = jogo.moves();
+      const r = jogo.move(respostas[Math.floor(Math.random() * respostas.length)]);
+      ultima = { from: r.from, to: r.to };
+      pensando = false;
+      renderizar(animacoesDoLance(r.from, r.to));
+      somDoUltimoLance();
+      atualizarStatus();
+    }, 700);
+    return;
+  }
+
+  // Lance errado: volta
+  pensando = true;
+  SONS.erro();
+  $('status').textContent = 'Não é esse lance. Tente de novo! ❌';
+  $('status').className = '';
+  atualizarJogadores();
+  setTimeout(() => {
+    if (id !== partidaId) return;
+    jogo.undo();
+    ultima = null;
+    pensando = false;
+    renderizar();
+    atualizarStatus();
+  }, 900);
+}
+
+/* ============================================================
    BOT (minimax com poda alfa-beta)
 ============================================================ */
 const VALOR = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 0 };
 
-// Pontuação positiva = vantagem das brancas
 function avaliar(g) {
   let total = 0;
   const tab = g.board();
@@ -554,7 +1045,7 @@ function avaliar(g) {
       const p = tab[i][j];
       if (!p) continue;
       let v = VALOR[p.type];
-      const centro = 3.5 - Math.abs(3.5 - j) + (3.5 - Math.abs(3.5 - i)); // quanto mais ao centro, maior
+      const centro = 3.5 - Math.abs(3.5 - j) + (3.5 - Math.abs(3.5 - i));
       if (p.type === 'n' || p.type === 'b') v += centro * 4;
       if (p.type === 'p') {
         const avanco = p.color === 'w' ? 7 - i : i;
@@ -567,7 +1058,6 @@ function avaliar(g) {
 }
 
 function ordenar(jogadas) {
-  // Capturas e xeques primeiro → poda mais cortes
   const peso = (m) => (m.includes('x') ? 2 : 0) + (m.includes('+') ? 1 : 0);
   return jogadas.sort((a, b) => peso(b) - peso(a));
 }
@@ -575,8 +1065,8 @@ function ordenar(jogadas) {
 function minimax(g, profundidade, alfa, beta) {
   const jogadas = g.moves();
   if (jogadas.length === 0) {
-    if (!g.inCheck()) return 0; // afogamento
-    return g.turn() === 'w' ? -100000 - profundidade : 100000 + profundidade; // xeque-mate
+    if (!g.inCheck()) return 0;
+    return g.turn() === 'w' ? -100000 - profundidade : 100000 + profundidade;
   }
   if (profundidade === 0) return avaliar(g);
 
@@ -635,24 +1125,24 @@ function escolherJogadaDoBot(g, nivelBot) {
 function jogarBot() {
   const id = partidaId;
   const inicio = Date.now();
+  const atraso = relogio.ligado ? ATRASO_BOT_RELOGIO_MS : ATRASO_BOT_MS;
   pensando = true;
   $('status').textContent = 'Bot pensando... 🤔';
   $('status').className = 'pensando';
   atualizarJogadores();
 
-  // O pequeno atraso deixa o navegador mostrar "pensando" antes do cálculo pesado
   setTimeout(() => {
-    if (id !== partidaId) return; // partida foi reiniciada enquanto pensava
-    const san = escolherJogadaDoBot(jogo, nivel);
-
-    // Espera o que faltar para completar ATRASO_BOT_MS no total
-    const resto = Math.max(0, ATRASO_BOT_MS - (Date.now() - inicio));
+    if (id !== partidaId || !ativo) return;
+    const san = escolherJogadaDoBot(new Chess(jogo.fen()), nivel);
+    const resto = Math.max(0, atraso - (Date.now() - inicio));
     setTimeout(() => {
-      if (id !== partidaId) return;
+      if (id !== partidaId || !ativo) return;
       const r = jogo.move(san);
       ultima = { from: r.from, to: r.to };
       pensando = false;
+      trocarRelogio();
       renderizar(animacoesDoLance(r.from, r.to));
+      somDoUltimoLance();
       atualizarStatus();
     }, resto);
   }, 60);
@@ -661,64 +1151,117 @@ function jogarBot() {
 /* ============================================================
    ONLINE (Socket.IO)
 ============================================================ */
+function linkDaSala() {
+  return `${location.origin}${location.pathname}?sala=${salaAtual}`;
+}
+
+function entrarNaSala(codigo) {
+  salaAtual = codigo;
+  const s = conectar();
+  if (s.connected) s.emit('entrar-sala', { codigo, nome: meuNome(), id: meuId, sessao: minhaSessao });
+}
+
+// Monta o jogo a partir da lista de lances (assim a lista de jogadas e as regras de empate funcionam)
+function jogoDoHistorico(historico) {
+  const g = new Chess();
+  for (const san of historico) g.move(san);
+  return g;
+}
+
+function relogioDoServidor(r) {
+  if (!r) return;
+  relogio = { ligado: r.ligado, w: r.w, b: r.b, inc: 0, vez: r.vez, desde: performance.now(), rodando: r.rodando };
+}
+
+const TEXTOS_FIM = {
+  mate: null, // o próprio tabuleiro explica
+  afogamento: null,
+  repeticao: null,
+  material: null,
+  empate: null,
+  tempo: (v, eu) => (v === eu ? 'O tempo do oponente acabou. Você venceu! ⏰🏆' : 'Seu tempo acabou. ⏰'),
+  desistencia: (v, eu) => (v === eu ? 'Seu oponente desistiu. Você venceu! 🏆' : 'Você desistiu.'),
+  acordo: () => 'Empate por acordo. 🤝',
+  abandono: (v, eu) => (v === eu ? 'Seu oponente abandonou a partida. Você venceu! 🏆' : 'Você abandonou a partida.'),
+};
+
 function conectar() {
   if (socket) return socket;
   socket = io();
 
-  socket.on('sala-criada', ({ codigo, cor }) => {
-    modo = 'online';
-    minhaCor = cor;
-    orientacao = cor;
-    jogo = new Chess();
-    ativo = false;
-    prepararTelaDeJogo();
-    $('info').textContent = `Código da sala: ${codigo} — passe para seu amigo. Você joga de ${cor === 'w' ? 'brancas' : 'pretas'}.`;
-    renderizar();
-    atualizarHistorico();
-    $('status').textContent = 'Aguardando o oponente entrar...';
-    $('status').className = '';
+  socket.on('connect', () => {
+    $('conexao').hidden = true;
+    if (salaAtual) socket.emit('entrar-sala', { codigo: salaAtual, nome: meuNome(), id: meuId, sessao: minhaSessao });
   });
 
-  socket.on('sala-entrada', ({ codigo, cor }) => {
-    modo = 'online';
-    minhaCor = cor;
-    orientacao = cor;
-    jogo = new Chess();
-    ativo = false;
-    prepararTelaDeJogo();
-    $('info').textContent = `Sala ${codigo} — você joga de ${cor === 'w' ? 'brancas' : 'pretas'}.`;
-    renderizar();
-    atualizarHistorico();
+  socket.on('disconnect', () => {
+    if (socket && salaAtual) $('conexao').hidden = false;
   });
 
-  socket.on('inicio', ({ fen }) => {
-    jogo = new Chess(fen);
-    ativo = true;
-    ultima = null;
+  socket.on('sala', (s) => {
+    const novaSala = salaAtual !== s.codigo || modo !== 'online' || $('jogo').hidden;
+    const novaPartida = novaSala || minhaCor !== s.cor || s.historico.length < jogo.history().length;
+    modo = 'online';
+    salaAtual = s.codigo;
+    try { sessionStorage.setItem('xadrez-sala', s.codigo); } catch { /* ok */ }
+    history.replaceState(null, '', `?sala=${s.codigo}`);
+    minhaCor = s.cor;
+    nomesOnline = s.jogadores;
+
+    if (novaSala) {
+      prepararTelaDeJogo();
+      $('chat-msgs').innerHTML = '';
+    } else if (novaPartida) {
+      // revanche: limpa o estado da partida mas mantém o chat
+      fimExtra = null;
+      empateEnviado = false;
+      revancheEnviada = false;
+      ultima = null;
+      partidaId++;
+    }
+    if (novaPartida) orientacao = s.cor;
+
+    jogo = jogoDoHistorico(s.historico);
+    ativo = s.iniciada && !s.encerrada;
+    relogioDoServidor(s.relogio);
+    fimExtra = null;
+    if (s.encerrada && s.resultado) aplicarFimOnline(s.resultado, false);
+
+    const esperando = !s.iniciada;
+    $('convite').hidden = !esperando;
+    $('codigo-sala').textContent = s.codigo;
+    const tempo = s.base ? ` · ⏱ ${s.base / 60000} min${s.incremento ? ` + ${s.incremento / 1000}s` : ''}` : '';
+    $('info').textContent = `Sala ${s.codigo} · Você joga de ${s.cor === 'w' ? 'brancas' : 'pretas'}${tempo}`;
+
     renderizar();
     atualizarStatus();
+    if (s.iniciada && !s.encerrada && s.historico.length === 0) {
+      SONS.inicio();
+      if (novaPartida && !novaSala) avisar('Revanche! As cores foram trocadas. 🔁');
+    }
   });
 
-  socket.on('estado', ({ fen, ultima: u }) => {
-    // O servidor repete a minha própria jogada: já está na tela, não redesenha
-    // (redesenhar cortaria a animação no meio).
-    if (fen === jogo.fen()) {
+  socket.on('estado', ({ historico, ultima: u, relogio: r }) => {
+    relogioDoServidor(r);
+    const atual = jogo.history();
+    const igual = historico.length === atual.length && historico.every((m, i) => m === atual[i]);
+    if (igual) {
       atualizarStatus();
       return;
     }
-    jogo = new Chess(fen);
+    jogo = jogoDoHistorico(historico);
     if (u) ultima = u;
     selecionada = null;
     destinos = [];
-    // Anima só quando foi o oponente que jogou (agora é a minha vez)
-    const animar = u && jogo.turn() === minhaCor ? animacoesDoLance(u.from, u.to) : [];
-    renderizar(animar);
+    const doOponente = u && jogo.turn() === minhaCor;
+    renderizar(doOponente ? animacoesDoLance(u.from, u.to) : []);
+    if (doOponente) somDoUltimoLance();
     atualizarStatus();
   });
 
-  // --- Desistência e empate (o servidor decide e avisa os dois) ---
   socket.on('empate-proposto', async () => {
     if (!ativo) return;
+    SONS.msg();
     const r = await perguntar('Seu oponente propôs empate. Você aceita?', 'Aceitar', 'Recusar');
     if (r !== null) socket.emit('responder-empate', r);
   });
@@ -726,33 +1269,139 @@ function conectar() {
   socket.on('empate-recusado', () => {
     empateEnviado = false;
     avisar('O oponente recusou o empate.');
-    atualizarBotoesOnline();
+    atualizarBotoes();
   });
 
-  socket.on('fim', ({ motivo, vencedor }) => {
-    ativo = false;
-    empateEnviado = false;
-    fecharDialogo();
-    let texto;
-    if (motivo === 'empate') texto = 'Empate por acordo. 🤝';
-    else if (vencedor === minhaCor) texto = 'Seu oponente desistiu. Você venceu! 🏆';
-    else texto = `Você desistiu. ${vencedor === 'w' ? 'Brancas' : 'Pretas'} venceram.`;
-    $('status').textContent = texto;
-    $('status').className = 'fim';
+  socket.on('fim', (resultado) => {
+    relogioDoServidor(resultado.relogio);
+    if (resultado.jogadores) nomesOnline = resultado.jogadores;
+    aplicarFimOnline(resultado, true);
+  });
+
+  socket.on('revanche-pedida', () => {
+    SONS.msg();
+    avisar('Seu oponente quer revanche! 🔁');
+    $('btn-revanche').textContent = '🔁 Aceitar revanche';
+  });
+
+  socket.on('oponente-desconectou', ({ segundos }) => {
+    nomesOnline[oposta(minhaCor)] = { ...(nomesOnline[oposta(minhaCor)] || {}), conectado: false };
+    avisar(`Seu oponente caiu. Esperando ele voltar (até ${segundos}s)...`);
+    atualizarJogadores();
+  });
+
+  socket.on('oponente-voltou', ({ jogadores }) => {
+    nomesOnline = jogadores;
+    avisar('Seu oponente voltou! 👋');
     atualizarJogadores();
   });
 
   socket.on('oponente-saiu', () => {
     fecharDialogo();
-    ativo = false;
-    $('status').textContent = 'Seu oponente saiu da partida.';
-    $('status').className = 'fim';
-    atualizarJogadores();
+    const op = oposta(minhaCor);
+    nomesOnline[op] = null;
+    if (ativo) ativo = false;
+    avisar('Seu oponente saiu da sala.');
+    atualizarStatus();
   });
 
-  socket.on('erro-sala', (mensagem) => alert(mensagem));
+  socket.on('chat', ({ nome, cor, texto }) => {
+    const div = document.createElement('div');
+    div.className = 'msg' + (cor === minhaCor ? ' minha' : '');
+    const b = document.createElement('b');
+    b.textContent = nome + ': ';
+    div.append(b, document.createTextNode(texto));
+    $('chat-msgs').appendChild(div);
+    $('chat-msgs').scrollTop = $('chat-msgs').scrollHeight;
+    if (cor !== minhaCor) SONS.msg();
+  });
+
+  socket.on('erro-sala', (mensagem) => {
+    avisar(mensagem);
+    SONS.erro();
+    if (!$('jogo').hidden && modo === 'online') return;
+    // não conseguiu entrar: volta ao menu limpo
+    salaAtual = null;
+    try { sessionStorage.removeItem('xadrez-sala'); } catch { /* ok */ }
+    history.replaceState(null, '', location.pathname);
+    mostrar('menu');
+  });
 
   return socket;
 }
 
+function aplicarFimOnline({ vencedor, motivo }, comemorarAgora) {
+  const wasAtivo = ativo;
+  ativo = false;
+  relogio.rodando = false;
+  empateEnviado = false;
+  revancheEnviada = false;
+  $('btn-revanche').textContent = '🔁 Revanche';
+  fecharDialogo();
+  const f = TEXTOS_FIM[motivo];
+  fimExtra = f ? f(vencedor, minhaCor) : null;
+  atualizarStatus();
+  if (comemorarAgora && (wasAtivo || motivo !== 'abandono')) comemorar(vencedor);
+}
+
+// Chat
+$('chat-form').onsubmit = (e) => {
+  e.preventDefault();
+  const texto = $('chat-texto').value.trim();
+  if (!texto || !socket) return;
+  socket.emit('chat', texto);
+  $('chat-texto').value = '';
+};
+
+/* ============================================================
+   RANKING
+============================================================ */
+$('btn-ranking').onclick = async () => {
+  $('ranking').hidden = false;
+  const corpo = $('ranking-lista');
+  corpo.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+  try {
+    const lista = await (await fetch('/api/ranking')).json();
+    if (!lista.length) {
+      corpo.innerHTML = '<tr><td colspan="4">Ninguém no ranking ainda. Jogue uma partida online!</td></tr>';
+      return;
+    }
+    corpo.innerHTML = '';
+    lista.forEach((j, i) => {
+      const tr = document.createElement('tr');
+      const medalha = ['🥇', '🥈', '🥉'][i] || `${i + 1}º`;
+      for (const valor of [medalha, j.nome, j.elo, `${j.v}V ${j.e}E ${j.d}D`]) {
+        const td = document.createElement('td');
+        td.textContent = valor;
+        tr.appendChild(td);
+      }
+      corpo.appendChild(tr);
+    });
+  } catch {
+    corpo.innerHTML = '<tr><td colspan="4">Não foi possível carregar o ranking.</td></tr>';
+  }
+};
+$('ranking-fechar').onclick = () => ($('ranking').hidden = true);
+
+/* ============================================================
+   INÍCIO
+============================================================ */
+aplicarTema(guardar.ler('xadrez-tema', 'madeira'));
+atualizarBotaoSom();
 mostrar('menu');
+
+// Abriu um link de convite (?sala=XXXX) ou recarregou a página no meio de uma partida
+const salaDoLink = new URLSearchParams(location.search).get('sala');
+if (salaDoLink) {
+  const codigo = salaDoLink.trim().toUpperCase().slice(0, 4);
+  let recarregou = false;
+  try { recarregou = sessionStorage.getItem('xadrez-sala') === codigo; } catch { /* ok */ }
+  escolherModo('online');
+  $('codigo').value = codigo;
+  if (recarregou || $('apelido').value.trim()) {
+    entrarNaSala(codigo);
+  } else {
+    $('convite-recebido').hidden = false;
+    $('apelido').focus();
+  }
+}

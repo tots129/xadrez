@@ -57,8 +57,9 @@ button:hover { background: #3a3f5f; border-color: #50567a; }
 button:active { transform: scale(0.97); }
 button.destaque { background: var(--verde2); border-color: var(--verde); font-weight: 600; }
 button.destaque:hover { background: var(--verde); }
-input { text-transform: uppercase; width: 130px; text-align: center; letter-spacing: 4px; font-weight: 700; }
-input::placeholder { letter-spacing: 1px; font-weight: 400; opacity: 0.5; }
+#codigo { text-transform: uppercase; width: 130px; text-align: center; letter-spacing: 4px; font-weight: 700; }
+#codigo::placeholder { letter-spacing: 1px; font-weight: 400; opacity: 0.5; }
+input::placeholder { opacity: 0.5; }
 select { cursor: pointer; }
 
 /* ---------- Menu ---------- */
@@ -70,7 +71,7 @@ select { cursor: pointer; }
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
 }
 
-.modos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.modos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .modo {
   display: flex;
   flex-direction: column;
@@ -99,6 +100,9 @@ select { cursor: pointer; }
 .opcoes label select { color: var(--texto); font-size: 15px; }
 .ou { color: var(--suave); align-self: center; }
 
+@media (max-width: 640px) {
+  .modos { grid-template-columns: repeat(2, 1fr); }
+}
 @media (max-width: 520px) {
   .modos { grid-template-columns: 1fr; }
   .modo { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 12px 16px; text-align: left; }
@@ -304,6 +308,140 @@ svg.pc .dot { fill: var(--p-det); stroke: none; }
 
 .dialogo-botoes { display: flex; gap: 10px; justify-content: center; margin-top: 4px; }
 button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+/* ---------- Temas do tabuleiro ---------- */
+body[data-tema='verde']  { --clara: #eeeed2; --escura: #769656; --moldura: #2f3b22; }
+body[data-tema='azul']   { --clara: #dee3e6; --escura: #7d99ab; --moldura: #26343e; }
+body[data-tema='cinza']  { --clara: #e4e4e4; --escura: #9a9a9a; --moldura: #333; }
+body[data-tema='roxo']   { --clara: #efe6f5; --escura: #9779b3; --moldura: #382847; }
+body[data-tema='escuro'] { --clara: #6b7084; --escura: #3c4052; --moldura: #15161f; }
+
+/* ---------- Barra de configurações ---------- */
+.config { display: flex; gap: 8px; justify-content: center; align-items: center; margin-top: 10px; }
+.config select { padding: 6px 10px; font-size: 14px; }
+.tema-label { display: flex; align-items: center; gap: 6px; }
+button.icone { padding: 6px 12px; font-size: 18px; line-height: 1.2; }
+
+/* ---------- Menu: apelido e convites ---------- */
+.apelido {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0 auto 16px;
+  max-width: 320px;
+  font-size: 13px;
+  color: var(--suave);
+  text-align: left;
+}
+.apelido input { width: 100%; color: var(--texto); }
+.convite-recebido {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #2f3d3a;
+  border: 1px solid var(--verde);
+}
+.opcoes .bloco { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; justify-content: center; }
+
+.convite {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  width: var(--tab);
+  margin: 0 auto 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px dashed var(--verde);
+}
+.convite b { letter-spacing: 3px; font-size: 20px; color: #ffd76a; }
+.convite small { width: 100%; color: var(--suave); }
+
+/* ---------- Relógio ---------- */
+.jogador .relogio {
+  margin-left: 8px;
+  padding: 3px 10px;
+  border-radius: 7px;
+  background: var(--bg2);
+  font-variant-numeric: tabular-nums;
+  font-size: 18px;
+  min-width: 68px;
+  text-align: center;
+  opacity: 0.6;
+}
+.jogador .relogio.correndo { opacity: 1; background: #e9ecf5; color: #111; }
+.jogador .relogio.pouco.correndo { background: #d64545; color: #fff; animation: pulsar 1s ease-in-out infinite; }
+.jogador.offline .nome::before { content: '⚠️ '; }
+.jogador.offline .nome { opacity: 0.6; }
+
+/* ---------- Dica ---------- */
+.casa.dica::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(80, 230, 120, 0.5);
+  animation: pulsar 1s ease-in-out infinite;
+}
+
+/* ---------- Chat ---------- */
+.chat {
+  width: var(--tab);
+  margin: 10px auto 0;
+  background: var(--card);
+  border: 1px solid var(--borda);
+  border-radius: 10px;
+  overflow: hidden;
+  text-align: left;
+}
+.chat-msgs { height: 130px; overflow-y: auto; padding: 8px 12px; font-size: 14px; line-height: 1.5; }
+.chat-msgs:empty::before { content: 'Nenhuma mensagem ainda. Diga oi! 👋'; color: var(--suave); }
+.chat-msgs .msg { word-wrap: break-word; }
+.chat-msgs .msg b { color: #8fb8ff; }
+.chat-msgs .msg.minha b { color: var(--verde); }
+.chat-form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--borda); }
+.chat-form input { flex: 1; min-width: 0; }
+
+/* ---------- Ranking ---------- */
+.ranking-caixa { width: min(92vw, 460px); max-height: 85vh; overflow-y: auto; }
+.ranking-caixa table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.ranking-caixa th, .ranking-caixa td { padding: 7px 6px; border-bottom: 1px solid var(--borda); text-align: left; }
+.ranking-caixa th { color: var(--suave); font-weight: 400; font-size: 13px; }
+.ranking-caixa td:nth-child(3) { font-weight: 700; color: #ffd76a; }
+.ranking-caixa .nota { display: block; margin: 10px 0; color: var(--suave); }
+
+/* ---------- Confete e conexão ---------- */
+.confete { position: fixed; inset: 0; pointer-events: none; z-index: 200; }
+#conexao {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 150;
+  padding: 8px;
+  background: #8a2f2f;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ---------- Celular ---------- */
+@media (max-width: 520px) {
+  :root { --tab: calc(100vw - 16px); }
+  main { padding: 8px; }
+  h1 { font-size: 28px; }
+  .topo { margin-bottom: 12px; }
+  #status { font-size: 16px; padding: 6px 14px; }
+  .controles { gap: 6px; }
+  .controles button { padding: 8px 10px; font-size: 14px; }
+  .jogador { padding: 5px 8px; gap: 6px; font-size: 14px; }
+  .jogador .capturadas .peca.mini { width: 18px; height: 18px; margin-left: -7px; }
+  .jogador .relogio { font-size: 16px; min-width: 58px; padding: 2px 6px; }
+  .coord { font-size: 9px; }
+  .casa.destino.captura::after { border-width: 3px; }
+  .promo-btn { width: 62px; height: 62px; }
+  .opcoes .bloco { width: 100%; }
+}
 
 #aviso {
   position: fixed;

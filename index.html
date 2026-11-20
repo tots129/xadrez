@@ -2,19 +2,44 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1b1d2a" />
+  <meta name="description" content="Jogue xadrez contra o bot, com um amigo no mesmo aparelho ou online." />
   <title>Xadrez</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♞</text></svg>" />
   <link rel="stylesheet" href="/style.css" />
 </head>
-<body>
+<body data-tema="madeira">
   <main>
     <header class="topo">
       <h1><span class="logo">♞</span> Xadrez</h1>
       <p class="sub">Jogue contra o bot, com um amigo ou online</p>
+      <div class="config">
+        <label class="tema-label">🎨
+          <select id="tema" aria-label="Tema do tabuleiro">
+            <option value="madeira">Madeira</option>
+            <option value="verde">Verde clássico</option>
+            <option value="azul">Azul</option>
+            <option value="cinza">Cinza</option>
+            <option value="roxo">Roxo</option>
+            <option value="escuro">Escuro</option>
+          </select>
+        </label>
+        <button id="btn-som" class="icone" title="Desligar sons">🔊</button>
+        <button id="btn-ranking" class="icone" title="Ranking">🏆</button>
+      </div>
     </header>
 
     <!-- MENU -->
     <section id="menu" class="painel">
+      <div id="convite-recebido" class="convite-recebido" hidden>
+        🎉 Você foi convidado para uma partida! Escolha um apelido e clique em <b>Entrar</b>.
+      </div>
+
+      <label class="apelido">Seu apelido
+        <input id="apelido" maxlength="16" placeholder="Como quer ser chamado?" autocomplete="nickname" />
+      </label>
+
       <div class="modos">
         <button class="modo" data-modo="bot">
           <span class="ico">🤖</span>
@@ -24,12 +49,17 @@
         <button class="modo" data-modo="local">
           <span class="ico">👥</span>
           <strong>Local</strong>
-          <small>2 pessoas, mesmo PC</small>
+          <small>2 pessoas, mesmo aparelho</small>
         </button>
         <button class="modo" data-modo="online">
           <span class="ico">🌐</span>
           <strong>Online</strong>
           <small>Jogue com um amigo</small>
+        </button>
+        <button class="modo" data-modo="problema">
+          <span class="ico">🧩</span>
+          <strong>Problemas</strong>
+          <small>Ache o xeque-mate</small>
         </button>
       </div>
 
@@ -38,23 +68,65 @@
           <select id="cor-bot">
             <option value="w">Brancas</option>
             <option value="b">Pretas</option>
+            <option value="aleatorio">Sortear</option>
           </select>
         </label>
         <label>Nível do bot
           <select id="nivel-bot">
-            <option value="1">Fácil (jogadas aleatórias)</option>
+            <option value="1">Fácil</option>
             <option value="2" selected>Médio</option>
             <option value="3">Difícil</option>
+          </select>
+        </label>
+        <label>Relógio
+          <select id="relogio-bot">
+            <option value="0+0">Sem relógio</option>
+            <option value="3+2">3 min + 2s</option>
+            <option value="5+0">5 min</option>
+            <option value="10+0">10 min</option>
+            <option value="15+10">15 min + 10s</option>
           </select>
         </label>
         <button id="btn-iniciar-bot" class="destaque">Começar</button>
       </div>
 
+      <div id="opcoes-local" class="opcoes" hidden>
+        <label>Relógio
+          <select id="relogio-local">
+            <option value="0+0">Sem relógio</option>
+            <option value="1+0">1 min</option>
+            <option value="3+2">3 min + 2s</option>
+            <option value="5+0">5 min</option>
+            <option value="10+0">10 min</option>
+          </select>
+        </label>
+        <button id="btn-iniciar-local" class="destaque">Começar</button>
+      </div>
+
       <div id="opcoes-online" class="opcoes" hidden>
-        <button id="btn-criar" class="destaque">Criar sala</button>
+        <div class="bloco">
+          <label>Relógio
+            <select id="relogio-online">
+              <option value="0+0">Sem relógio</option>
+              <option value="1+0">1 min</option>
+              <option value="3+2">3 min + 2s</option>
+              <option value="5+0" selected>5 min</option>
+              <option value="10+0">10 min</option>
+              <option value="15+10">15 min + 10s</option>
+            </select>
+          </label>
+          <button id="btn-criar" class="destaque">Criar sala</button>
+        </div>
         <span class="ou">ou</span>
-        <input id="codigo" placeholder="CÓDIGO" maxlength="4" autocomplete="off" />
-        <button id="btn-entrar">Entrar</button>
+        <div class="bloco">
+          <input id="codigo" placeholder="CÓDIGO" maxlength="4" autocomplete="off" />
+          <button id="btn-entrar">Entrar</button>
+        </div>
+      </div>
+
+      <div id="opcoes-problema" class="opcoes" hidden>
+        <span id="progresso-problemas" class="ou"></span>
+        <button id="btn-iniciar-problema" class="destaque">Começar</button>
       </div>
     </section>
 
@@ -63,9 +135,16 @@
       <div id="status"></div>
       <div id="info"></div>
 
+      <div id="convite" class="convite" hidden>
+        <span>Código da sala: <b id="codigo-sala"></b></span>
+        <button id="btn-copiar" class="destaque">📋 Copiar link de convite</button>
+        <small>Mande o link para seu amigo. A partida começa quando ele entrar.</small>
+      </div>
+
       <div class="jogador" id="jog-topo">
         <span class="cor-ic"></span><span class="nome"></span>
         <span class="capturadas"></span><span class="vantagem"></span>
+        <span class="relogio" hidden></span>
       </div>
 
       <div id="tabuleiro"></div>
@@ -73,12 +152,16 @@
       <div class="jogador" id="jog-base">
         <span class="cor-ic"></span><span class="nome"></span>
         <span class="capturadas"></span><span class="vantagem"></span>
+        <span class="relogio" hidden></span>
       </div>
 
       <div class="controles">
+        <button id="btn-revanche" class="destaque" hidden>🔁 Revanche</button>
+        <button id="btn-proximo" class="destaque" hidden>➜ Próximo problema</button>
         <button id="btn-novo">↻ Novo jogo</button>
+        <button id="btn-dica">💡 Dica</button>
         <button id="btn-desfazer">↶ Desfazer</button>
-        <button id="btn-girar">⇅ Girar tabuleiro</button>
+        <button id="btn-girar">⇅ Girar</button>
         <button id="btn-auto">🔄 Giro automático: ligado</button>
         <button id="btn-empate">🤝 Propor empate</button>
         <button id="btn-desistir">🏳️ Desistir</button>
@@ -86,10 +169,17 @@
       </div>
 
       <div id="historico" hidden></div>
+
+      <div id="chat" class="chat" hidden>
+        <div id="chat-msgs" class="chat-msgs" aria-live="polite"></div>
+        <form id="chat-form" class="chat-form">
+          <input id="chat-texto" maxlength="200" placeholder="Mande uma mensagem..." autocomplete="off" />
+          <button type="submit">Enviar</button>
+        </form>
+      </div>
     </section>
   </main>
 
-  <!-- Escolha da peça na promoção do peão -->
   <div id="promocao" class="overlay" hidden>
     <div class="caixa">
       <p>Promover o peão para:</p>
@@ -97,7 +187,6 @@
     </div>
   </div>
 
-  <!-- Perguntas (desistir, aceitar empate) -->
   <div id="dialogo" class="overlay" hidden>
     <div class="caixa">
       <p id="dialogo-texto"></p>
@@ -108,6 +197,19 @@
     </div>
   </div>
 
+  <div id="ranking" class="overlay" hidden>
+    <div class="caixa ranking-caixa">
+      <p>🏆 Ranking online</p>
+      <table>
+        <thead><tr><th></th><th>Jogador</th><th>Pontos</th><th>Partidas</th></tr></thead>
+        <tbody id="ranking-lista"></tbody>
+      </table>
+      <small class="nota">Só contam partidas online com pelo menos 2 lances de cada lado.</small>
+      <div class="dialogo-botoes"><button id="ranking-fechar">Fechar</button></div>
+    </div>
+  </div>
+
+  <div id="conexao" hidden>⚠️ Conexão perdida. Tentando reconectar...</div>
   <div id="aviso" hidden></div>
 
   <script src="/socket.io/socket.io.js"></script>

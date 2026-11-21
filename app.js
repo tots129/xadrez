@@ -1,4 +1,6 @@
 import { Chess } from 'https://cdn.jsdelivr.net/npm/chess.js@1/+esm';
+import { PROBLEMAS } from './problemas.js';
+import { AULAS } from './aulas.js';
 
 /* ============================================================
    CONFIGURAÇÕES (mude aqui se quiser)
@@ -61,23 +63,7 @@ function svgPeca(tipo) {
 /* ============================================================
    PROBLEMAS DE XADREZ (todos conferidos com o motor)
 ============================================================ */
-const PROBLEMAS = [
-  { fen: '6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1', n: 1, nome: 'Mate do corredor' },
-  { fen: 'r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 0 1', n: 1, nome: 'Mate do pastor' },
-  { fen: 'rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 1', n: 1, nome: 'Mate do louco' },
-  { fen: '6rk/6pp/8/6N1/8/8/8/6K1 w - - 0 1', n: 1, nome: 'Mate sufocado' },
-  { fen: '7k/8/6K1/8/8/8/8/Q7 w - - 0 1', n: 1, nome: 'Dama e rei' },
-  { fen: 'r5k1/8/8/8/8/8/5PPP/6K1 b - - 0 1', n: 1, nome: 'Corredor das pretas' },
-  { fen: 'rnbqkbnr/ppppp2p/5p2/6p1/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1', n: 1, nome: 'Abertura desastrosa' },
-  { fen: 'k7/8/1K6/8/8/8/8/7R w - - 0 1', n: 1, nome: 'Torre e rei' },
-  { fen: '5k2/5P2/5K2/8/8/8/8/7R w - - 0 1', n: 1, nome: 'Peão protegido' },
-  { fen: '4k3/R7/4K3/8/8/8/8/7R w - - 0 1', n: 1, nome: 'Duas torres' },
-  { fen: '7k/8/8/8/8/8/R7/1R4K1 w - - 0 1', n: 2, nome: 'Escada de torres' },
-  { fen: '1r5k/6pp/7N/8/2Q5/8/8/6K1 w - - 0 1', n: 2, nome: 'Mate de Philidor' },
-  { fen: 'kbK5/pp6/1P6/8/8/8/8/R7 w - - 0 1', n: 2, nome: 'O sacrifício de Morphy' },
-  { fen: 'r1b2k1r/ppp1bppp/8/1B1Q4/5q2/2P5/PPP2PPP/R3R1K1 w - - 1 1', n: 2, nome: 'Dama no sacrifício' },
-  { fen: 'r2qkb1r/pp2nppp/3p4/2pNN1B1/2BnP3/3P4/PPP2PPP/R2bK2R w KQkq - 1 1', n: 2, nome: 'Mate de Légal' },
-];
+// A lista fica em problemas.js (são muitos)
 
 /* ============================================================
    ESTADO
@@ -300,9 +286,114 @@ document.querySelectorAll('[data-modo]').forEach((botao) => {
 $('btn-iniciar-bot').onclick = iniciarBot;
 $('btn-iniciar-local').onclick = iniciarLocal;
 $('btn-iniciar-problema').onclick = () => {
-  const proximo = PROBLEMAS.findIndex((_, i) => !resolvidos.has(i));
+  const filtro = Number($('filtro-problemas').value);
+  const ok = (p, i) => !resolvidos.has(i) && (!filtro || p.n === filtro);
+  const proximo = PROBLEMAS.findIndex(ok);
   iniciarProblema(proximo === -1 ? 0 : proximo);
 };
+$('filtro-problemas').onchange = () => atualizarProgressoProblemas();
+
+/* ---------- Problema do dia (o mesmo para todo mundo, muda à meia-noite de Brasília) ---------- */
+let problemaDoDia = false; // o problema aberto agora é o do dia?
+const hojeBrasil = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+function indiceDoDia(data = hojeBrasil()) {
+  let h = 0;
+  for (const c of data) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % PROBLEMAS.length;
+}
+// Sequência de dias: da conta (se logado) ou deste aparelho
+function estadoDoDia() {
+  const ontem = new Date(Date.now() - 86400000);
+  const ontemBr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(ontem);
+  const d = conta ? { data: conta.problema_dia_data, seq: conta.problema_dia_seq } : guardar.ler('xadrez-dia', { data: null, seq: 0 });
+  const feitoHoje = d.data === hojeBrasil();
+  const seq = feitoHoje || d.data === ontemBr ? d.seq : 0;
+  return { feitoHoje, seq };
+}
+function atualizarInfoDoDia() {
+  const { feitoHoje, seq } = estadoDoDia();
+  const p = PROBLEMAS[indiceDoDia()];
+  $('dia-info').textContent = (feitoHoje ? '✅ Resolvido hoje! Volte amanhã' : `Mate em ${p.n} · resolva para manter a sequência`) +
+    (seq ? ` · 🔥 ${seq} dia${seq > 1 ? 's' : ''} seguido${seq > 1 ? 's' : ''}` : '');
+}
+$('btn-problema-dia').onclick = () => {
+  iniciarProblema(indiceDoDia());
+  problemaDoDia = true;
+  $('info').textContent = `📅 Problema do dia (${new Date().toLocaleDateString('pt-BR')}) · mate em ${PROBLEMAS[problemaAtual].n}`;
+};
+async function registrarProblemaDoDia() {
+  if (conta) {
+    try { conta = (await api('/progresso/problema-dia', {})).usuario; } catch { /* tenta de novo amanhã */ }
+  } else {
+    const { feitoHoje, seq } = estadoDoDia();
+    if (!feitoHoje) guardar.salvar('xadrez-dia', { data: hojeBrasil(), seq: seq + 1 });
+  }
+  const { seq } = estadoDoDia();
+  if (seq > 1) setTimeout(() => avisar(`🔥 ${seq} dias seguidos resolvendo o problema do dia!`), 800);
+}
+
+/* ---------- Aulas ---------- */
+function abrirAula(i) {
+  const aula = AULAS[i];
+  document.querySelectorAll('.aula-btn').forEach((b, j) => b.classList.toggle('ativa', i === j));
+  const el = $('aula-conteudo');
+  el.innerHTML = '';
+  const h = document.createElement('h3');
+  h.textContent = `${aula.icone} ${aula.titulo}`;
+  el.appendChild(h);
+  for (const bloco of aula.blocos) {
+    if (bloco.texto) {
+      const p = document.createElement('p');
+      p.textContent = bloco.texto;
+      el.appendChild(p);
+    } else if (bloco.tabuleiro) {
+      const fig = document.createElement('figure');
+      const tab = document.createElement('div');
+      tab.className = 'tabuleiro-mini aula-tab';
+      const { fen, casa, legenda } = bloco.tabuleiro;
+      const g = new Chess(fen);
+      const pontos = casa ? g.moves({ square: casa, verbose: true }).map((m) => m.to) : [];
+      desenharMini(tab, fen, 'w', { pontos, destaque: casa });
+      const cap = document.createElement('figcaption');
+      cap.textContent = legenda;
+      fig.append(tab, cap);
+      el.appendChild(fig);
+    } else if (bloco.abertura) {
+      const b = document.createElement('button');
+      b.className = 'abertura-btn';
+      b.textContent = `▶ ${bloco.abertura.nome}  ·  ${bloco.abertura.lances.slice(0, 4).join(' ')}…`;
+      b.onclick = () => {
+        $('aulas').hidden = true;
+        abrirReplay({ historico: bloco.abertura.lances, brancas: 'Brancas', pretas: 'Pretas', titulo: `📖 ${bloco.abertura.nome}` });
+        irPara(0);
+        $('replay-fechar').onclick = () => { $('replay').hidden = true; $('aulas').hidden = false; voltarFecharReplayPadrao(); };
+      };
+      el.appendChild(b);
+    }
+  }
+  el.scrollTop = 0;
+}
+function voltarFecharReplayPadrao() {
+  $('replay-fechar').onclick = () => {
+    rp.analisando = false;
+    $('replay').hidden = true;
+  };
+}
+$('btn-aulas').onclick = () => {
+  const lista = $('aulas-lista');
+  if (!lista.children.length) {
+    AULAS.forEach((a, i) => {
+      const b = document.createElement('button');
+      b.className = 'aula-btn';
+      b.textContent = `${a.icone} ${a.titulo}`;
+      b.onclick = () => abrirAula(i);
+      lista.appendChild(b);
+    });
+  }
+  $('aulas').hidden = false;
+  abrirAula(0);
+};
+$('aulas-fechar').onclick = () => ($('aulas').hidden = true);
 /* ---------- ⚡ Partida rápida ---------- */
 let naFila = null;     // o que mandamos ao servidor (para reenviar se a conexão cair)
 let filaTimer = null;
@@ -484,6 +575,7 @@ function iniciarBot() {
 function iniciarProblema(i) {
   modo = 'problema';
   problemaAtual = i;
+  problemaDoDia = false;
   const p = PROBLEMAS[i];
   jogo = new Chess(p.fen);
   minhaCor = jogo.turn();
@@ -499,6 +591,20 @@ function iniciarProblema(i) {
 
 function atualizarProgressoProblemas() {
   $('progresso-problemas').textContent = `${resolvidos.size} de ${PROBLEMAS.length} resolvidos`;
+  atualizarInfoDoDia();
+  // Grade com todos os problemas (verde = resolvido)
+  const filtro = Number($('filtro-problemas').value);
+  const grade = $('grade-problemas');
+  grade.innerHTML = '';
+  PROBLEMAS.forEach((p, i) => {
+    if (filtro && p.n !== filtro) return;
+    const b = document.createElement('button');
+    b.className = 'prob' + (resolvidos.has(i) ? ' feito' : '') + (p.n === 2 ? ' m2' : '');
+    b.textContent = i + 1;
+    b.title = `${p.nome}${resolvidos.has(i) ? ' ✅' : ''}`;
+    b.onclick = () => iniciarProblema(i);
+    grade.appendChild(b);
+  });
 }
 
 /* ============================================================
@@ -1176,6 +1282,10 @@ function conferirProblema() {
     $('status').textContent = 'Resolvido! Muito bem! ✅';
     $('status').className = 'fim';
     $('info').textContent = `Problema ${problemaAtual + 1} de ${PROBLEMAS.length}: ${PROBLEMAS[problemaAtual].nome} ✅`;
+    if (problemaDoDia) {
+      $('info').textContent = '📅 Problema do dia resolvido! ✅ Volte amanhã para um novo.';
+      registrarProblemaDoDia();
+    }
     SONS.vitoria();
     confete();
     atualizarJogadores();
@@ -1972,7 +2082,9 @@ function desenharMini(el, fen, orient, marcas = {}) {
       div.className = 'casa ' + ((c + r) % 2 === 1 ? 'escura' : 'clara');
       if (marcas.ultima && (casa === marcas.ultima.from || casa === marcas.ultima.to)) div.classList.add('ultima');
       if (marcas.melhor && (casa === marcas.melhor.from || casa === marcas.melhor.to)) div.classList.add('dica');
+      if (marcas.destaque === casa) div.classList.add('selecionada');
       const p = g.get(casa);
+      if (marcas.pontos?.includes(casa)) div.classList.add('destino', ...(p ? ['captura'] : []));
       if (p && p.type === 'k' && g.inCheck() && p.color === g.turn()) div.classList.add('xeque');
       if (p) {
         const span = document.createElement('span');

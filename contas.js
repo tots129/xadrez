@@ -106,7 +106,8 @@ setInterval(() => {
 async function perfil(id) {
   const [u] = await q(
     `SELECT id, nome, email, round(elo)::int AS elo, vitorias, derrotas, empates,
-            bot_vitorias, bot_derrotas, bot_empates, problemas, tema
+            bot_vitorias, bot_derrotas, bot_empates, problemas, tema,
+            to_char(problema_dia_data, 'YYYY-MM-DD') AS problema_dia_data, problema_dia_seq
      FROM usuarios WHERE id = $1`,
     [id]
   );
@@ -438,6 +439,21 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     );
     if (r2?.n >= 10) await darConquista(req.usuario.id, 'problemas_10');
     if (r2?.n >= 30) await darConquista(req.usuario.id, 'problemas_30');
+    res.json({ usuario: await perfil(req.usuario.id) });
+  });
+
+  // Resolveu o problema do dia: conta a sequência de dias seguidos (no horário de Brasília)
+  r.post('/progresso/problema-dia', precisaLogin, async (req, res) => {
+    const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+    const [u] = await q(
+      `UPDATE usuarios SET
+         problema_dia_seq = CASE WHEN problema_dia_data = $2::date THEN problema_dia_seq
+                                 WHEN problema_dia_data = $2::date - 1 THEN problema_dia_seq + 1 ELSE 1 END,
+         problema_dia_data = $2::date
+       WHERE id = $1 RETURNING problema_dia_seq`,
+      [req.usuario.id, hoje]
+    );
+    if (u?.problema_dia_seq >= 7) await darConquista(req.usuario.id, 'problema_dia_7');
     res.json({ usuario: await perfil(req.usuario.id) });
   });
 

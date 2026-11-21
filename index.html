@@ -27,6 +27,7 @@
         </label>
         <button id="btn-som" class="icone" title="Desligar sons">🔊</button>
         <button id="btn-ranking" class="icone" title="Ranking">🏆</button>
+        <button id="btn-aulas" class="icone" title="Aulas de xadrez">📚</button>
         <button id="btn-conta" class="conta-btn" hidden>👤 Entrar</button>
         <button id="btn-admin" class="conta-btn" hidden>🛠️ Admin</button>
       </div>
@@ -134,9 +135,21 @@
         </div>
       </div>
 
-      <div id="opcoes-problema" class="opcoes" hidden>
-        <span id="progresso-problemas" class="ou"></span>
-        <button id="btn-iniciar-problema" class="destaque">Começar</button>
+      <div id="opcoes-problema" class="opcoes coluna" hidden>
+        <button id="btn-problema-dia" class="dia">
+          <span class="ico">📅</span>
+          <span><b>Problema do dia</b><small id="dia-info"></small></span>
+        </button>
+        <div class="linha centro">
+          <span id="progresso-problemas" class="ou"></span>
+          <select id="filtro-problemas" aria-label="Filtrar problemas">
+            <option value="0">Todos</option>
+            <option value="1">Mate em 1 (fácil)</option>
+            <option value="2">Mate em 2 (médio)</option>
+          </select>
+          <button id="btn-iniciar-problema" class="destaque">Próximo não resolvido</button>
+        </div>
+        <div id="grade-problemas" class="grade-problemas"></div>
       </div>
     </section>
 
@@ -307,6 +320,20 @@
       <div class="dialogo-botoes">
         <button id="btn-sair-conta">Sair da conta</button>
         <button id="perfil-fechar" class="destaque">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aulas -->
+  <div id="aulas" class="overlay" hidden>
+    <div class="caixa aulas-caixa">
+      <div class="admin-topo">
+        <p>📚 Aprenda xadrez</p>
+        <button id="aulas-fechar" class="destaque">Fechar</button>
+      </div>
+      <div class="aulas-corpo">
+        <nav id="aulas-lista" class="aulas-lista"></nav>
+        <article id="aula-conteudo" class="aula-conteudo"></article>
       </div>
     </div>
   </div>

@@ -17,7 +17,7 @@ const io = new Server(server);
 const ESPERA_RECONEXAO_MS = 60_000;
 
 // Só estes arquivos ficam públicos (o server.js, db.js e contas.js, por exemplo, não).
-const ARQUIVOS_PUBLICOS = ['index.html', 'style.css', 'app.js'];
+const ARQUIVOS_PUBLICOS = ['index.html', 'style.css', 'app.js', 'problemas.js', 'aulas.js'];
 
 /* ============================================================
    QUEM ESTÁ ONLINE (para a lista de amigos)

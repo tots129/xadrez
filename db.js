@@ -107,6 +107,9 @@ const ESQUEMA = [
   `ALTER TABLE partidas ADD COLUMN IF NOT EXISTS historico TEXT`,
   // Vitórias seguidas (para conquistas)
   `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sequencia INT NOT NULL DEFAULT 0`,
+  // Problema do dia: último dia resolvido e quantos dias seguidos
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS problema_dia_data DATE`,
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS problema_dia_seq INT NOT NULL DEFAULT 0`,
   // Como o ELO mudou ao longo do tempo (gráfico e ranking do mês)
   `CREATE TABLE IF NOT EXISTS elo_historico (
     id SERIAL PRIMARY KEY,

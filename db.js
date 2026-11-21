@@ -106,9 +106,23 @@ const ESQUEMA = [
   )`,
 ];
 
+// Mudanças que devem rodar UMA vez só (ficam anotadas na tabela "migracoes")
+const MIGRACOES = [
+  // Pedido do dono: todas as contas existentes voltam para 1700 de ELO (vitórias/derrotas continuam salvas)
+  ['elo-1700-todas-as-contas', 'UPDATE usuarios SET elo = 1700'],
+];
+
 export async function prepararBanco() {
   if (!executar) return;
   for (const comando of ESQUEMA) await q(comando);
+  await q('CREATE TABLE IF NOT EXISTS migracoes (nome TEXT PRIMARY KEY, feita_em TIMESTAMPTZ NOT NULL DEFAULT now())');
+  for (const [nome, comando] of MIGRACOES) {
+    const feita = await q('SELECT 1 FROM migracoes WHERE nome = $1', [nome]);
+    if (feita.length) continue;
+    await q(comando);
+    await q('INSERT INTO migracoes (nome) VALUES ($1)', [nome]);
+    console.log(`Migração feita: ${nome}`);
+  }
   await q('DELETE FROM sessoes WHERE expira_em < now()');
   await q("DELETE FROM logins WHERE quando < now() - interval '90 days'"); // guarda só 90 dias
   console.log(`Banco de dados pronto (${tipoBanco}).`);

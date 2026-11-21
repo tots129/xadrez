@@ -717,6 +717,10 @@ function atualizarJogadores() {
     el.dataset.modo = modo;
     el.dataset.bot = modo === 'bot' && cor !== minhaCor ? '1' : '0';
     el.querySelector('.nome').textContent = nomeDoJogador(cor);
+    // No online, clicar no nome de quem tem conta abre o perfil
+    const jog = modo === 'online' ? nomesOnline[cor] : null;
+    el.querySelector('.nome').classList.toggle('clicavel', !!jog?.conta);
+    el.querySelector('.nome').onclick = jog?.conta ? () => abrirPerfilPublico(jog.nome) : null;
     el.classList.toggle('vez', emAndamento() && jogo.turn() === cor);
     el.classList.toggle('offline', modo === 'online' && nomesOnline[cor] && !nomesOnline[cor].conectado);
     el.querySelector('.capturadas').innerHTML = material[op].perdidas
@@ -1044,7 +1048,7 @@ function comemorar(vencedor) {
   // Salva o resultado contra o bot na conta
   if (modo === 'bot' && conta) {
     const resultado = vencedor === null ? 'e' : euVenci ? 'v' : 'd';
-    api('/progresso/bot', { resultado }).then((r) => (conta = r.usuario)).catch(() => {});
+    api('/progresso/bot', { resultado, nivel }).then((r) => (conta = r.usuario)).catch(() => {});
   }
   if (vencedor === null) SONS.empate();
   else if (euVenci) {
@@ -1620,6 +1624,13 @@ function conectar() {
   });
 
   // Só chega para o administrador
+  // Ganhou uma conquista nova!
+  socket.on('conquista', ({ icone, nome, desc }) => {
+    SONS.vitoria();
+    confete();
+    mostrarConquista(icone, nome, desc);
+  });
+
   socket.on('nova-denuncia', ({ de, contra }) => {
     SONS.msg();
     avisar(`🚩 Nova denúncia: ${de} denunciou ${contra}.`);
@@ -1739,32 +1750,204 @@ $('chat-form').onsubmit = (e) => {
 /* ============================================================
    RANKING
 ============================================================ */
-$('btn-ranking').onclick = async () => {
-  $('ranking').hidden = false;
-  $('ligas').textContent = LIGAS.map((l) => `${l.icone} ${l.nome} ${l.min ? l.min + '+' : ''}`.trim()).join('  ·  ');
+// Link que abre o perfil público de alguém
+function linkPerfil(nome) {
+  const a = document.createElement('a');
+  a.href = '#';
+  a.className = 'link-perfil';
+  a.textContent = nome;
+  a.onclick = (e) => {
+    e.preventDefault();
+    abrirPerfilPublico(nome);
+  };
+  return a;
+}
+
+const NOMES_MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const nomeMes = (t) => `${NOMES_MESES[Number(t.slice(5, 7)) - 1]}/${t.slice(0, 4)}`;
+
+let abaRanking = 'geral';
+document.querySelectorAll('.aba-rk').forEach((b) => (b.onclick = () => {
+  abaRanking = b.dataset.aba;
+  carregarRanking();
+}));
+
+async function carregarRanking() {
+  document.querySelectorAll('.aba-rk').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === abaRanking));
   const corpo = $('ranking-lista');
-  corpo.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+  const cab = $('ranking-cabecalho');
+  const cabecalhos = {
+    geral: ['', 'Jogador', 'ELO', 'Partidas'],
+    mes: ['', 'Jogador', 'ELO ganho no mês', 'Partidas'],
+    campeoes: ['Mês', 'Lugar', 'Jogador', 'ELO ganho'],
+  }[abaRanking];
+  cab.innerHTML = '';
+  for (const c of cabecalhos) {
+    const th = document.createElement('th');
+    th.textContent = c;
+    cab.appendChild(th);
+  }
+  const mensagem = (t) => (corpo.innerHTML = `<tr><td colspan="4">${t}</td></tr>`);
+  mensagem('Carregando...');
   try {
-    const lista = await (await fetch('/api/ranking')).json();
+    const url = abaRanking === 'campeoes' ? '/api/temporadas' : abaRanking === 'mes' ? '/api/ranking?periodo=mes' : '/api/ranking';
+    const lista = await (await fetch(url)).json();
     if (!lista.length) {
-      corpo.innerHTML = '<tr><td colspan="4">Ninguém no ranking ainda. Jogue uma partida online!</td></tr>';
-      return;
+      return mensagem(abaRanking === 'campeoes' ? 'Nenhum mês terminou ainda. O pódio aparece aqui no começo de cada mês.' : 'Ninguém no ranking ainda. Jogue uma partida online!');
     }
     corpo.innerHTML = '';
     lista.forEach((j, i) => {
       const tr = document.createElement('tr');
-      const medalha = ['🥇', '🥈', '🥉'][i] || `${i + 1}º`;
-      for (const valor of [medalha, j.nome, eloTexto(j.elo), `${j.v}V ${j.e}E ${j.d}D`]) {
+      const medalha = (p) => ['🥇', '🥈', '🥉'][p] || `${p + 1}º`;
+      const celulas = abaRanking === 'geral' ? [medalha(i), linkPerfil(j.nome), eloTexto(j.elo), `${j.v}V ${j.e}E ${j.d}D`]
+        : abaRanking === 'mes' ? [medalha(i), linkPerfil(j.nome), `+${j.pontos}`, j.partidas]
+          : [nomeMes(j.temporada), medalha(j.posicao - 1), linkPerfil(j.nome), `+${j.pontos}`];
+      for (const valor of celulas) {
         const td = document.createElement('td');
-        td.textContent = valor;
+        if (valor instanceof Node) td.appendChild(valor);
+        else td.textContent = valor;
         tr.appendChild(td);
       }
       corpo.appendChild(tr);
     });
   } catch {
-    corpo.innerHTML = '<tr><td colspan="4">Não foi possível carregar o ranking.</td></tr>';
+    mensagem('Não foi possível carregar o ranking.');
   }
+}
+
+$('btn-ranking').onclick = () => {
+  $('ranking').hidden = false;
+  $('ligas').textContent = LIGAS.map((l) => `${l.icone} ${l.nome} ${l.min ? l.min + '+' : ''}`.trim()).join('  ·  ');
+  carregarRanking();
 };
+
+/* ---------- Perfil público ---------- */
+async function abrirPerfilPublico(nome) {
+  let p;
+  try {
+    p = await api('/perfil/' + encodeURIComponent(nome));
+  } catch (err) {
+    return avisar(err.message);
+  }
+  document.querySelectorAll('.overlay').forEach((o) => (o.hidden = true));
+  $('perfil-pub').hidden = false;
+  const lg = liga(p.elo);
+  $('pp-nome').textContent = `👤 ${p.nome}`;
+  $('pp-sub').textContent = `${p.jogando ? '🟡 jogando agora' : p.online ? '🟢 online' : '⚪ offline'} · jogando desde ${new Date(p.criado_em).toLocaleDateString('pt-BR')}`;
+  $('pp-elo').textContent = eloTexto(p.elo);
+  $('pp-liga').textContent = `ELO · liga ${lg.nome}`;
+  $('pp-online').textContent = `${p.vitorias}/${p.empates}/${p.derrotas}`;
+  $('pp-seq').textContent = p.sequencia >= 3 ? `🔥 ${p.sequencia}` : p.sequencia;
+  $('pp-problemas').textContent = p.problemas;
+
+  // Títulos de temporada (pódio de meses passados)
+  const tit = $('pp-titulos');
+  tit.innerHTML = '';
+  for (const t of p.titulos) {
+    const s = document.createElement('span');
+    s.className = 'titulo';
+    s.textContent = `${['🥇', '🥈', '🥉'][t.posicao - 1]} ${t.posicao}º lugar · ${nomeMes(t.temporada)}`;
+    tit.appendChild(s);
+  }
+
+  // Ações: adicionar amigo / desafiar
+  const acoes = $('pp-acoes');
+  acoes.innerHTML = '';
+  if (conta && !p.souEu) {
+    if (!p.amizade) {
+      acoes.appendChild(botaoAdmin('➕ Adicionar amigo', async () => {
+        try { avisar((await api('/amigos/pedir', { nome: p.nome })).texto); } catch (err) { avisar(err.message); }
+        abrirPerfilPublico(p.nome);
+      }, 'destaque'));
+    } else {
+      const s = document.createElement('span');
+      s.className = 'nota';
+      s.textContent = { amigos: '✅ Vocês são amigos', enviado: '⏳ Pedido de amizade enviado', recebido: '📩 Essa pessoa te mandou um pedido (veja em Minha conta)' }[p.amizade];
+      acoes.appendChild(s);
+    }
+  }
+
+  desenharGraficoElo($('pp-grafico'), p.historicoElo);
+
+  const conqEl = $('pp-conquistas');
+  conqEl.innerHTML = '';
+  const todas = await todasConquistas();
+  const tem = new Map(p.conquistas.map((c) => [c.codigo, c]));
+  $('pp-conq-n').textContent = `${p.conquistas.length} de ${Object.keys(todas).length}`;
+  for (const [codigo, c] of Object.entries(todas)) {
+    const d = document.createElement('div');
+    const ganha = tem.get(codigo);
+    d.className = 'conquista' + (ganha ? ' ganha' : '');
+    d.title = c.desc + (ganha ? ` — conquistada em ${new Date(ganha.criado_em).toLocaleDateString('pt-BR')}` : ' — ainda não conquistada');
+    const i = document.createElement('span');
+    i.className = 'ic';
+    i.textContent = c.icone;
+    const n = document.createElement('small');
+    n.textContent = c.nome;
+    d.append(i, n);
+    conqEl.appendChild(d);
+  }
+
+  const part = $('pp-partidas');
+  part.innerHTML = '';
+  if (!p.partidas.length) part.textContent = 'Nenhuma partida online ainda.';
+  for (const x of p.partidas) {
+    const div = document.createElement('div');
+    div.className = 'partida ' + x.resultado;
+    const s = document.createElement('span');
+    const icone = { vitoria: '🏆 Vitória', derrota: '❌ Derrota', empate: '🤝 Empate' }[x.resultado];
+    s.textContent = `${icone} contra ${x.oponente} · ${MOTIVOS[x.motivo] || x.motivo} · ${new Date(x.quando).toLocaleDateString('pt-BR')}`;
+    div.appendChild(s);
+    if (x.temReplay) div.appendChild(botaoReplay(x.id, x.cor));
+    part.appendChild(div);
+  }
+}
+$('pp-fechar').onclick = () => ($('perfil-pub').hidden = true);
+
+// Cartão "Conquista desbloqueada!" que aparece por alguns segundos
+function mostrarConquista(icone, nome, desc) {
+  const d = document.createElement('div');
+  d.className = 'toast-conquista';
+  const i = document.createElement('span');
+  i.className = 'ic';
+  i.textContent = icone;
+  const t = document.createElement('div');
+  const b = document.createElement('b');
+  b.textContent = `Conquista desbloqueada: ${nome}`;
+  const s = document.createElement('small');
+  s.textContent = desc;
+  t.append(b, s);
+  d.append(i, t);
+  document.body.appendChild(d);
+  setTimeout(() => d.classList.add('saindo'), 5000);
+  setTimeout(() => d.remove(), 5600);
+}
+
+let cacheConquistas = null;
+async function todasConquistas() {
+  if (!cacheConquistas) cacheConquistas = await api('/conquistas');
+  return cacheConquistas;
+}
+
+function desenharGraficoElo(svg, pontos) {
+  if (!pontos.length) {
+    svg.innerHTML = '<text x="200" y="64" text-anchor="middle" class="g-texto">Jogue partidas online para ver o gráfico</text>';
+    return;
+  }
+  const valores = [pontos[0].elo - pontos[0].delta, ...pontos.map((p) => p.elo)];
+  const min = Math.min(...valores);
+  const max = Math.max(...valores);
+  const faixa = Math.max(20, max - min);
+  const x = (i) => 8 + (i / Math.max(1, valores.length - 1)) * 384;
+  const y = (v) => 108 - ((v - min) / faixa) * 92;
+  const linha = valores.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  svg.innerHTML =
+    `<polyline points="${linha}" class="g-linha"/>` +
+    valores.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.5" class="g-ponto"><title>${v}</title></circle>`).join('') +
+    `<text x="4" y="12" class="g-texto">${max}</text><text x="4" y="118" class="g-texto">${min}</text>`;
+}
+
+$('btn-meu-perfil').onclick = () => conta && abrirPerfilPublico(conta.nome);
 $('ranking-fechar').onclick = () => ($('ranking').hidden = true);
 
 /* ============================================================
@@ -2237,11 +2420,12 @@ async function carregarPartidas() {
   }
 }
 
-function linhaAmigo(texto, botoes) {
+function linhaAmigo(texto, botoes, nome) {
   const div = document.createElement('div');
   div.className = 'amigo';
   const span = document.createElement('span');
-  span.textContent = texto;
+  if (nome) span.append(linkPerfil(nome), document.createTextNode(texto));
+  else span.textContent = texto;
   div.appendChild(span);
   for (const [rotulo, acao, destaque] of botoes) {
     const b = document.createElement('button');
@@ -2299,7 +2483,7 @@ async function carregarAmigos() {
         const ok = await perguntarPorCima(`Desfazer a amizade com ${a.nome}?`);
         if (ok) acaoAmigo('/amigos/remover', a.id);
       }]);
-      const linha = linhaAmigo(`${a.nome} · ${eloTexto(a.elo)} ELO · ${estado}`, botoes);
+      const linha = linhaAmigo(` · ${eloTexto(a.elo)} ELO · ${estado}`, botoes, a.nome);
       linha.lastChild.title = 'Desfazer amizade';
       lista.appendChild(linha);
     }

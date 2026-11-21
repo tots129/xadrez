@@ -213,8 +213,13 @@
   <div id="ranking" class="overlay" hidden>
     <div class="caixa ranking-caixa">
       <p>🏆 Ranking de ELO</p>
+      <div class="abas" style="margin-bottom:10px">
+        <button type="button" class="aba-rk ativa" data-aba="geral">Geral</button>
+        <button type="button" class="aba-rk" data-aba="mes">Este mês</button>
+        <button type="button" class="aba-rk" data-aba="campeoes">Campeões</button>
+      </div>
       <table>
-        <thead><tr><th></th><th>Jogador</th><th>ELO</th><th>Partidas</th></tr></thead>
+        <thead><tr id="ranking-cabecalho"><th></th><th>Jogador</th><th>ELO</th><th>Partidas</th></tr></thead>
         <tbody id="ranking-lista"></tbody>
       </table>
       <small class="nota">Todo mundo começa com 0 de ELO, e ele nunca fica negativo. Ganhar de alguém mais forte dá mais ELO; perder para alguém mais fraco tira mais. Só contam partidas online entre duas contas, com pelo menos 2 lances de cada lado.</small>
@@ -267,6 +272,8 @@
         <div><b id="st-problemas"></b><small>problemas</small></div>
       </div>
 
+      <button id="btn-meu-perfil" class="largo">📈 Ver meu perfil completo (gráfico de ELO e conquistas)</button>
+
       <h3>👥 Amigos</h3>
       <form id="amigo-form" class="linha">
         <input id="amigo-nome" maxlength="16" placeholder="Nome do amigo" autocomplete="off" />
@@ -301,6 +308,31 @@
         <button id="btn-sair-conta">Sair da conta</button>
         <button id="perfil-fechar" class="destaque">Fechar</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Perfil público de um jogador -->
+  <div id="perfil-pub" class="overlay" hidden>
+    <div class="caixa perfil-caixa">
+      <div class="admin-topo">
+        <p id="pp-nome"></p>
+        <button id="pp-fechar" class="destaque">Fechar</button>
+      </div>
+      <div id="pp-sub" class="nota"></div>
+      <div id="pp-titulos" class="pp-titulos"></div>
+      <div class="stats">
+        <div><b id="pp-elo"></b><small id="pp-liga"></small></div>
+        <div><b id="pp-online"></b><small>online (V/E/D)</small></div>
+        <div><b id="pp-seq"></b><small>vitórias seguidas</small></div>
+        <div><b id="pp-problemas"></b><small>problemas</small></div>
+      </div>
+      <div id="pp-acoes" class="linha" style="margin-top:10px"></div>
+      <h3>📈 ELO ao longo do tempo</h3>
+      <svg id="pp-grafico" class="grafico-elo" viewBox="0 0 400 120" preserveAspectRatio="none"></svg>
+      <h3>🏅 Conquistas <small id="pp-conq-n" class="nota"></small></h3>
+      <div id="pp-conquistas" class="conquistas"></div>
+      <h3>📜 Últimas partidas</h3>
+      <div id="pp-partidas" class="partidas"></div>
     </div>
   </div>
 

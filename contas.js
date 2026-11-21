@@ -113,13 +113,82 @@ async function perfil(id) {
   return u ? { ...u, admin: ehAdmin(u.email) } : null;
 }
 
+/* ---------- Conquistas ---------- */
+let avisarUsuario = () => {}; // definido quando as rotas são montadas
+export const CONQUISTAS = {
+  primeira_vitoria: { nome: 'Primeira vitória', icone: '🎉', desc: 'Venceu sua primeira partida online valendo ELO' },
+  vitorias_10: { nome: 'Dez vitórias', icone: '🔟', desc: 'Venceu 10 partidas online' },
+  vitorias_50: { nome: 'Veterano', icone: '🎖️', desc: 'Venceu 50 partidas online' },
+  sequencia_3: { nome: 'Embalado', icone: '🔥', desc: 'Venceu 3 partidas online seguidas' },
+  sequencia_10: { nome: 'Imparável', icone: '☄️', desc: 'Venceu 10 partidas online seguidas' },
+  partidas_100: { nome: 'Viciado em xadrez', icone: '♟️', desc: 'Jogou 100 partidas online' },
+  mate_rapido: { nome: 'Mate relâmpago', icone: '⚡', desc: 'Deu xeque-mate em até 10 lances numa partida online' },
+  bala: { nome: 'Bala', icone: '🚀', desc: 'Venceu uma partida online de 1 minuto' },
+  liga_ouro: { nome: 'Liga Ouro', icone: '🥇', desc: 'Chegou a 600 de ELO' },
+  liga_diamante: { nome: 'Liga Diamante', icone: '💎', desc: 'Chegou a 1500 de ELO' },
+  liga_mestre: { nome: 'Liga Mestre', icone: '👑', desc: 'Chegou a 2000 de ELO' },
+  bot_5: { nome: 'Domador de robôs', icone: '🤖', desc: 'Venceu o bot no nível 5 ou mais' },
+  bot_8: { nome: 'Exterminador', icone: '🦾', desc: 'Venceu o bot no nível 8 ou mais' },
+  bot_10: { nome: 'Lenda', icone: '🧠', desc: 'Venceu o bot no nível máximo (10)' },
+  problemas_10: { nome: 'Resolvedor', icone: '🧩', desc: 'Resolveu 10 problemas' },
+  problemas_30: { nome: 'Mestre dos problemas', icone: '🏅', desc: 'Resolveu 30 problemas' },
+  problema_dia_7: { nome: 'Semana perfeita', icone: '📅', desc: 'Resolveu o problema do dia 7 dias seguidos' },
+  amigos_5: { nome: 'Popular', icone: '👥', desc: 'Tem 5 amigos' },
+  campeao: { nome: 'Campeão do mês', icone: '🏆', desc: 'Terminou um mês em 1º lugar no ranking mensal' },
+};
+
+export async function darConquista(usuarioId, codigo) {
+  if (!usuarioId || !CONQUISTAS[codigo] || !bancoAtivo()) return;
+  const r = await q('INSERT INTO conquistas (usuario_id, codigo) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING codigo', [usuarioId, codigo]);
+  if (r.length) avisarUsuario(usuarioId, 'conquista', { codigo, ...CONQUISTAS[codigo] });
+}
+
+async function conquistasDeAmigos(usuarioId) {
+  const [r] = await q('SELECT count(*)::int AS n FROM amizades WHERE aceita AND (de = $1 OR para = $1)', [usuarioId]);
+  if (r.n >= 5) await darConquista(usuarioId, 'amigos_5');
+}
+
+/* ---------- Temporadas (ranking de cada mês) ---------- */
+const mesAtual = () => new Date().toISOString().slice(0, 7); // "2026-11"
+
+// Guarda o pódio dos meses que já acabaram (roda ao ligar o servidor e de hora em hora)
+export async function fecharTemporadas() {
+  if (!bancoAtivo()) return;
+  const meses = await q(
+    `SELECT DISTINCT to_char(criado_em AT TIME ZONE 'UTC', 'YYYY-MM') AS mes FROM elo_historico
+     WHERE to_char(criado_em AT TIME ZONE 'UTC', 'YYYY-MM') < $1
+       AND to_char(criado_em AT TIME ZONE 'UTC', 'YYYY-MM') NOT IN (SELECT temporada FROM temporada_premios)`,
+    [mesAtual()]
+  );
+  for (const { mes } of meses) {
+    const top = await rankingDoMes(mes, 3);
+    for (const [i, t] of top.entries()) {
+      await q('INSERT INTO temporada_premios (temporada, posicao, usuario_id, nome, pontos) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
+        [mes, i + 1, t.id, t.nome, t.pontos]);
+      if (i === 0) await darConquista(t.id, 'campeao');
+    }
+    if (!top.length) await q(`INSERT INTO temporada_premios (temporada, posicao, nome, pontos) VALUES ($1, 0, '-', 0) ON CONFLICT DO NOTHING`, [mes]);
+  }
+}
+
+// Ranking do mês: quem mais GANHOU ELO no mês
+async function rankingDoMes(mes, limite = 20) {
+  return q(
+    `SELECT u.id, u.nome, round(u.elo)::int AS elo, sum(h.delta)::int AS pontos, count(*)::int AS partidas
+     FROM elo_historico h JOIN usuarios u ON u.id = h.usuario_id
+     WHERE to_char(h.criado_em AT TIME ZONE 'UTC', 'YYYY-MM') = $1 AND NOT u.bloqueado
+     GROUP BY u.id HAVING sum(h.delta) > 0 ORDER BY pontos DESC, partidas DESC LIMIT $2`,
+    [mes, limite]
+  );
+}
+
 /* ---------- Ranking e partidas online (chamado pelo servidor do jogo) ---------- */
-export async function registrarPartida({ branco, preto, vencedor, motivo, lances, historico = [] }) {
+export async function registrarPartida({ branco, preto, vencedor, motivo, lances, historico = [], minutos = 0 }) {
   if (!bancoAtivo()) return null;
   if (!branco.usuarioId && !preto.usuarioId) return null; // dois convidados: nada a guardar
-  await q(
+  const [partida] = await q(
     `INSERT INTO partidas (branco, preto, branco_nome, preto_nome, vencedor, motivo, lances, historico)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
     [branco.usuarioId || null, preto.usuarioId || null, branco.nome, preto.nome, vencedor, motivo, lances, historico.join(' ')]
   );
 
@@ -138,15 +207,37 @@ export async function registrarPartida({ branco, preto, vencedor, motivo, lances
   // O ELO nunca fica negativo: quem está em 0 e perde continua em 0
   const novoB = Math.max(0, eb + deltaB);
   const novoP = Math.max(0, ep - deltaB);
-  await q(`UPDATE usuarios SET elo = $2, ${col(placarB)} = ${col(placarB)} + 1 WHERE id = $1`, [branco.usuarioId, novoB]);
-  await q(`UPDATE usuarios SET elo = $2, ${col(1 - placarB)} = ${col(1 - placarB)} + 1 WHERE id = $1`, [preto.usuarioId, novoP]);
+  // Vitórias seguidas: quem ganha soma 1, quem perde ou empata volta a 0
+  const seq = (placar) => (placar === 1 ? 'sequencia + 1' : '0');
+  const [ub] = await q(`UPDATE usuarios SET elo = $2, ${col(placarB)} = ${col(placarB)} + 1, sequencia = ${seq(placarB)} WHERE id = $1 RETURNING vitorias, derrotas, empates, sequencia`, [branco.usuarioId, novoB]);
+  const [up] = await q(`UPDATE usuarios SET elo = $2, ${col(1 - placarB)} = ${col(1 - placarB)} + 1, sequencia = ${seq(1 - placarB)} WHERE id = $1 RETURNING vitorias, derrotas, empates, sequencia`, [preto.usuarioId, novoP]);
   // Devolve o ELO novo e quanto cada um ganhou/perdeu (arredondado, como aparece na tela)
   const nb = Math.round(novoB);
   const np = Math.round(novoP);
-  return {
+  const mudanca = {
     w: { elo: nb, delta: nb - Math.round(eb) },
     b: { elo: np, delta: np - Math.round(ep) },
   };
+  await q('INSERT INTO elo_historico (usuario_id, elo, delta, partida_id) VALUES ($1, $2, $3, $5), ($4, $6, $7, $5)',
+    [branco.usuarioId, nb, mudanca.w.delta, preto.usuarioId, partida.id, np, mudanca.b.delta]);
+
+  // Conquistas
+  for (const [id, u, elo, ganhou] of [[branco.usuarioId, ub, nb, placarB === 1], [preto.usuarioId, up, np, placarB === 0]]) {
+    if (!u) continue;
+    if (u.vitorias + u.derrotas + u.empates >= 100) await darConquista(id, 'partidas_100');
+    if (elo >= 600) await darConquista(id, 'liga_ouro');
+    if (elo >= 1500) await darConquista(id, 'liga_diamante');
+    if (elo >= 2000) await darConquista(id, 'liga_mestre');
+    if (!ganhou) continue;
+    await darConquista(id, 'primeira_vitoria');
+    if (u.vitorias >= 10) await darConquista(id, 'vitorias_10');
+    if (u.vitorias >= 50) await darConquista(id, 'vitorias_50');
+    if (u.sequencia >= 3) await darConquista(id, 'sequencia_3');
+    if (u.sequencia >= 10) await darConquista(id, 'sequencia_10');
+    if (motivo === 'mate' && lances <= 20) await darConquista(id, 'mate_rapido');
+    if (minutos === 1) await darConquista(id, 'bala');
+  }
+  return mudanca;
 }
 
 /* ---------- Denúncias do chat (chamado pelo servidor do jogo) ---------- */
@@ -171,6 +262,7 @@ export async function saoAmigos(a, b) {
 // presenca(id) -> { online, jogando }; avisar(id, evento) -> manda um evento para as abas do usuário
 // painel() -> números e salas ao vivo; desconectar(id) -> derruba as conexões de um usuário
 export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
+  avisarUsuario = avisar;
   const r = express.Router();
   r.use(express.json({ limit: '20kb' }));
 
@@ -326,6 +418,12 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     const col = { v: 'bot_vitorias', d: 'bot_derrotas', e: 'bot_empates' }[req.body?.resultado];
     if (!col) return res.status(400).json({ erro: 'Resultado inválido.' });
     await q(`UPDATE usuarios SET ${col} = ${col} + 1 WHERE id = $1`, [req.usuario.id]);
+    const nivel = Number(req.body?.nivel) || 0;
+    if (req.body.resultado === 'v') {
+      if (nivel >= 5) await darConquista(req.usuario.id, 'bot_5');
+      if (nivel >= 8) await darConquista(req.usuario.id, 'bot_8');
+      if (nivel >= 10) await darConquista(req.usuario.id, 'bot_10');
+    }
     res.json({ usuario: await perfil(req.usuario.id) });
   });
 
@@ -333,10 +431,13 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
   r.post('/progresso/problemas', precisaLogin, async (req, res) => {
     const lista = Array.isArray(req.body?.resolvidos) ? req.body.resolvidos : [];
     const validos = [...new Set(lista.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < 500))];
-    await q(
-      `UPDATE usuarios SET problemas = ARRAY(SELECT DISTINCT unnest(problemas || $2::int[]) ORDER BY 1) WHERE id = $1`,
+    const [r2] = await q(
+      `UPDATE usuarios SET problemas = ARRAY(SELECT DISTINCT unnest(problemas || $2::int[]) ORDER BY 1) WHERE id = $1
+       RETURNING cardinality(problemas) AS n`,
       [req.usuario.id, validos]
     );
+    if (r2?.n >= 10) await darConquista(req.usuario.id, 'problemas_10');
+    if (r2?.n >= 30) await darConquista(req.usuario.id, 'problemas_30');
     res.json({ usuario: await perfil(req.usuario.id) });
   });
 
@@ -378,12 +479,62 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     res.json({ ...p, historico: p.historico ? p.historico.split(' ') : [] });
   });
 
+  // ?periodo=mes → quem mais ganhou ELO neste mês (temporada); sem nada → ranking geral
   r.get('/ranking', async (req, res) => {
+    if (req.query.periodo === 'mes') {
+      const rows = await rankingDoMes(mesAtual());
+      return res.json(rows.map(({ id, ...x }) => x));
+    }
     const rows = await q(
       `SELECT nome, round(elo)::int AS elo, vitorias AS v, derrotas AS d, empates AS e
-       FROM usuarios WHERE vitorias + derrotas + empates > 0 ORDER BY elo DESC LIMIT 20`
+       FROM usuarios WHERE vitorias + derrotas + empates > 0 AND NOT bloqueado ORDER BY elo DESC LIMIT 20`
     );
     res.json(rows);
+  });
+
+  // Campeões dos meses que já acabaram
+  r.get('/temporadas', async (req, res) => {
+    res.json(await q('SELECT temporada, posicao, nome, pontos FROM temporada_premios WHERE posicao > 0 ORDER BY temporada DESC, posicao LIMIT 36'));
+  });
+
+  r.get('/conquistas', (req, res) => res.json(CONQUISTAS));
+
+  // Perfil público de um jogador (por apelido)
+  r.get('/perfil/:nome', async (req, res) => {
+    const [u] = await q(
+      `SELECT id, nome, round(elo)::int AS elo, vitorias, derrotas, empates, sequencia,
+              bot_vitorias, cardinality(problemas) AS problemas, criado_em, bloqueado
+       FROM usuarios WHERE lower(nome) = lower($1)`,
+      [String(req.params.nome || '').slice(0, 32)]
+    );
+    if (!u || u.bloqueado) return res.status(404).json({ erro: 'Jogador não encontrado.' });
+    const [conquistas, historicoElo, partidas, titulos, amizade] = await Promise.all([
+      q('SELECT codigo, criado_em FROM conquistas WHERE usuario_id = $1 ORDER BY criado_em', [u.id]),
+      q(`SELECT elo, delta, criado_em FROM (SELECT * FROM elo_historico WHERE usuario_id = $1 ORDER BY criado_em DESC LIMIT 100) x ORDER BY criado_em`, [u.id]),
+      q(`SELECT id, branco, branco_nome, preto_nome, vencedor, motivo, criado_em, historico IS NOT NULL AS tem_replay
+         FROM partidas WHERE branco = $1 OR preto = $1 ORDER BY criado_em DESC LIMIT 10`, [u.id]),
+      q('SELECT temporada, posicao, pontos FROM temporada_premios WHERE usuario_id = $1 ORDER BY temporada DESC', [u.id]),
+      req.usuario ? q('SELECT aceita, de FROM amizades WHERE (de = $1 AND para = $2) OR (de = $2 AND para = $1)', [req.usuario.id, u.id]) : [],
+    ]);
+    const { id, bloqueado, ...publico } = u;
+    res.json({
+      ...publico,
+      ...presenca(id),
+      souEu: req.usuario?.id === id,
+      amizade: amizade[0] ? (amizade[0].aceita ? 'amigos' : amizade[0].de === req.usuario.id ? 'enviado' : 'recebido') : null,
+      conquistas: conquistas.map((c) => ({ ...c, ...CONQUISTAS[c.codigo] })),
+      historicoElo,
+      titulos,
+      partidas: partidas.map((p) => {
+        const cor = p.branco === id ? 'w' : 'b';
+        return {
+          id: p.id, temReplay: p.tem_replay, cor,
+          oponente: cor === 'w' ? p.preto_nome : p.branco_nome,
+          resultado: p.vencedor === null ? 'empate' : p.vencedor === cor ? 'vitoria' : 'derrota',
+          motivo: p.motivo, quando: p.criado_em,
+        };
+      }),
+    });
   });
 
   /* ---------- Amigos ---------- */
@@ -420,6 +571,8 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
       // A outra pessoa já tinha me pedido: vira amizade direto
       await q('UPDATE amizades SET aceita = true WHERE de = $1 AND para = $2', [alvo.id, eu]);
       avisar(alvo.id, 'amigos-mudou', { texto: `${req.usuario.nome} aceitou seu pedido de amizade! 🎉` });
+      await conquistasDeAmigos(eu);
+      await conquistasDeAmigos(alvo.id);
       return res.json({ ok: true, texto: `Agora você e ${alvo.nome} são amigos!` });
     }
     await q('INSERT INTO amizades (de, para) VALUES ($1, $2)', [eu, alvo.id]);
@@ -433,6 +586,8 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     const rows = await q('UPDATE amizades SET aceita = true WHERE de = $1 AND para = $2 AND NOT aceita RETURNING de', [id, eu]);
     if (!rows.length) return res.status(404).json({ erro: 'Pedido não encontrado.' });
     avisar(id, 'amigos-mudou', { texto: `${req.usuario.nome} aceitou seu pedido de amizade! 🎉` });
+    await conquistasDeAmigos(eu);
+    await conquistasDeAmigos(id);
     res.json({ ok: true });
   });
 

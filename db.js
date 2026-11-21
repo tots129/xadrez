@@ -105,6 +105,33 @@ const ESQUEMA = [
   )`,
   // Lances da partida (para o replay), separados por espaço: "e4 e5 Nf3 ..."
   `ALTER TABLE partidas ADD COLUMN IF NOT EXISTS historico TEXT`,
+  // Vitórias seguidas (para conquistas)
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sequencia INT NOT NULL DEFAULT 0`,
+  // Como o ELO mudou ao longo do tempo (gráfico e ranking do mês)
+  `CREATE TABLE IF NOT EXISTS elo_historico (
+    id SERIAL PRIMARY KEY,
+    usuario_id INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    elo INT NOT NULL,
+    delta INT NOT NULL,
+    partida_id INT REFERENCES partidas(id) ON DELETE SET NULL,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS elo_historico_usuario_idx ON elo_historico (usuario_id, criado_em)`,
+  `CREATE TABLE IF NOT EXISTS conquistas (
+    usuario_id INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    codigo TEXT NOT NULL,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (usuario_id, codigo)
+  )`,
+  // Pódio de cada mês (temporada), guardado quando o mês acaba
+  `CREATE TABLE IF NOT EXISTS temporada_premios (
+    temporada TEXT NOT NULL,
+    posicao INT NOT NULL,
+    usuario_id INT REFERENCES usuarios(id) ON DELETE CASCADE,
+    nome TEXT NOT NULL,
+    pontos INT NOT NULL,
+    PRIMARY KEY (temporada, posicao)
+  )`,
 ];
 
 // Mudanças que devem rodar UMA vez só (ficam anotadas na tabela "migracoes")

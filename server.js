@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { Chess } from 'chess.js';
 import { prepararBanco } from './db.js';
-import { rotasDeContas, lerCookie, usuarioDaSessao, registrarPartida, saoAmigos, registrarDenuncia } from './contas.js';
+import { rotasDeContas, lerCookie, usuarioDaSessao, registrarPartida, saoAmigos, registrarDenuncia, fecharTemporadas } from './contas.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -80,6 +80,7 @@ function registrarNoRanking(sala, codigo, vencedor, motivo) {
     motivo,
     lances: sala.chess.history().length,
     historico: sala.chess.history(),
+    minutos: sala.base / 60_000,
   })
     .then((mudanca) => {
       if (!mudanca) return;
@@ -577,6 +578,10 @@ io.on('connection', (socket) => {
 const PORTA = process.env.PORT || 3000;
 try {
   await prepararBanco();
+  // Fecha o pódio dos meses que acabaram (e confere de hora em hora)
+  const fechar = () => fecharTemporadas().catch((e) => console.error('Erro ao fechar temporada:', e.message));
+  fechar();
+  setInterval(fechar, 3600_000);
 } catch (e) {
   console.error('Não consegui preparar o banco de dados:', e.message);
 }

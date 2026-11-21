@@ -464,6 +464,33 @@ button.conta-btn { padding: 6px 12px; font-size: 14px; font-weight: 600; max-wid
 .ligas { margin: 4px 0 10px; color: var(--suave); font-size: 13px; line-height: 1.8; }
 .stats small#st-elo-liga { text-align: center; }
 
+/* ---------- Perfil público, conquistas, gráfico de ELO ---------- */
+.link-perfil { color: #8fb8ff; text-decoration: none; font-weight: 600; }
+.link-perfil:hover { text-decoration: underline; }
+.jogador .nome.clicavel { cursor: pointer; text-decoration: underline dotted; }
+button.largo { width: 100%; margin-top: 10px; }
+.grafico-elo { width: 100%; height: 120px; background: var(--bg2); border-radius: 8px; }
+.grafico-elo .g-linha { fill: none; stroke: var(--verde); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.grafico-elo .g-ponto { fill: var(--verde); }
+.grafico-elo .g-texto { fill: var(--suave); font-size: 10px; }
+.conquistas { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.conquista { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border-radius: 10px; background: var(--bg2); text-align: center; opacity: 0.35; filter: grayscale(1); cursor: help; }
+.conquista.ganha { opacity: 1; filter: none; background: var(--card2); border: 1px solid #d4a93a; }
+.conquista .ic { font-size: 26px; }
+.conquista small { font-size: 11px; line-height: 1.2; }
+.pp-titulos { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.pp-titulos .titulo { padding: 3px 10px; border-radius: 999px; background: #3b3320; border: 1px solid #d4a93a; color: #ffd76a; font-size: 13px; }
+.toast-conquista {
+  position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 400;
+  display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-radius: 14px;
+  background: linear-gradient(135deg, #3b3320, #2d3149); border: 1px solid #d4a93a;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6); animation: surgir 0.4s ease-out; transition: opacity 0.5s;
+}
+.toast-conquista .ic { font-size: 34px; }
+.toast-conquista b { display: block; color: #ffd76a; }
+.toast-conquista small { color: var(--suave); }
+.toast-conquista.saindo { opacity: 0; }
+
 /* ---------- Rever partida ---------- */
 .replay-caixa { width: min(96vw, 980px); max-height: 94vh; overflow-y: auto; text-align: left; padding: 16px; }
 .replay-corpo { display: flex; gap: 18px; margin-top: 12px; flex-wrap: wrap; }

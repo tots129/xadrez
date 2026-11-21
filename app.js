@@ -125,6 +125,8 @@ let relogio = { ligado: false, w: 0, b: 0, inc: 0, vez: 'w', desde: 0, rodando: 
 let salaAtual = null;
 let nomesOnline = { w: null, b: null };
 let revancheEnviada = false;
+let assistindo = null;      // código da sala que estou só assistindo
+let salaDeTorneio = null;   // { nome, rodada } quando a partida é de torneio
 
 // Problemas
 let problemaAtual = 0;
@@ -490,6 +492,8 @@ $('btn-copiar').onclick = async () => {
 
 function voltarAoMenu() {
   fecharDialogo();
+  assistindo = null;
+  salaDeTorneio = null;
   if (socket) {
     socket.emit('sair-sala');
     // Com conta, a conexão continua aberta para receber convites dos amigos
@@ -530,8 +534,10 @@ function prepararTelaDeJogo() {
   atualizarBotaoAuto();
   $('info').textContent = '';
   $('elo-mudanca').hidden = true;
+  $('espectadores').hidden = true;
   $('convite').hidden = true;
   $('chat').hidden = modo !== 'online';
+  $('chat-form').hidden = !!assistindo; // quem assiste só lê o chat
   mostrar('jogo');
 }
 
@@ -761,7 +767,7 @@ function nomeDoJogador(cor) {
   if (modo === 'online') {
     const vazio = jogo.history().length || fimExtra ? 'Saiu da sala' : 'Aguardando...';
     const j = nomesOnline[cor];
-    const n = (j?.nome || (cor === minhaCor ? eu : vazio)) + (j && !j.conta ? ' (convidado)' : '');
+    const n = (j?.avatar ? j.avatar + ' ' : '') + (j?.nome || (cor === minhaCor ? eu : vazio)) + (j && !j.conta ? ' (convidado)' : '');
     const elo = j?.conta && j.elo != null ? ` · ${eloTexto(j.elo)}` : '';
     return (cor === minhaCor ? `${n} (você)` : n) + elo;
   }
@@ -797,6 +803,12 @@ function emAndamento() {
 function atualizarBotoes() {
   const online = modo === 'online';
   const terminou = !emAndamento();
+  if (assistindo) {
+    // Só olhando: quase nenhum botão
+    for (const id of ['btn-novo', 'btn-proximo', 'btn-desfazer', 'btn-dica', 'btn-desistir', 'btn-empate', 'btn-revanche', 'btn-auto']) $(id).hidden = true;
+    $('btn-rever').hidden = !(terminou && jogo.history().length > 0);
+    return;
+  }
   $('btn-novo').hidden = online;
   $('btn-novo').textContent = modo === 'problema' ? '↻ Tentar de novo' : '↻ Novo jogo';
   $('btn-proximo').hidden = modo !== 'problema';
@@ -808,7 +820,7 @@ function atualizarBotoes() {
   $('btn-desistir').disabled = terminou;
   $('btn-empate').hidden = !online;
   $('btn-empate').disabled = terminou || empateEnviado;
-  const podeRevanche = online && salaAtual && terminou && nomesOnline.w && nomesOnline.b && jogo.history().length + (fimExtra ? 1 : 0) > 0;
+  const podeRevanche = online && salaAtual && !salaDeTorneio && terminou && nomesOnline.w && nomesOnline.b && jogo.history().length + (fimExtra ? 1 : 0) > 0;
   $('btn-revanche').hidden = !podeRevanche;
   $('btn-revanche').disabled = revancheEnviada;
 }
@@ -986,7 +998,7 @@ function tentarPremove() {
 }
 
 async function aoClicar(casa) {
-  if (!ativo || girando || escolhendoPromocao || jogo.isGameOver()) return;
+  if (assistindo || !ativo || girando || escolhendoPromocao || jogo.isGameOver()) return;
   if (!minhaVez() || (pensando && modo === 'bot')) {
     if (podePremove()) cliqueDePremove(casa);
     return;
@@ -1174,7 +1186,8 @@ function atualizarStatus() {
   } else if (jogo.isCheckmate()) {
     const vencedor = oposta(jogo.turn());
     const nomeVencedor = modo === 'online' ? nomesOnline[vencedor]?.nome || 'O oponente' : nomeDoJogador(vencedor);
-    if (modo === 'bot' || modo === 'online') texto = vencedor === minhaCor ? 'Xeque-mate! Você venceu! 🏆' : `Xeque-mate! ${nomeVencedor} venceu.`;
+    if (assistindo) texto = `Xeque-mate! ${nomeVencedor} venceu. 🏆`;
+    else if (modo === 'bot' || modo === 'online') texto = vencedor === minhaCor ? 'Xeque-mate! Você venceu! 🏆' : `Xeque-mate! ${nomeVencedor} venceu.`;
     else texto = `Xeque-mate! ${nomeDaCor(vencedor)} venceram. 🏆`;
     fim = true;
   } else if (jogo.isStalemate()) { texto = 'Empate por afogamento.'; fim = true; }
@@ -1183,6 +1196,8 @@ function atualizarStatus() {
   else if (jogo.isDraw()) { texto = 'Empate.'; fim = true; }
   else if (modo === 'problema') {
     texto = `${nomeDaCor(minhaCor)} jogam e dão mate em ${lancesRestantes}.`;
+  } else if (assistindo) {
+    texto = `👁 Assistindo · vez de ${nomesOnline[jogo.turn()]?.nome || vez}` + (jogo.inCheck() ? ' · Xeque!' : '');
   } else if (modo === 'online' && !ativo) {
     texto = 'Aguardando o oponente entrar...';
   } else if (modo === 'online') {
@@ -1574,7 +1589,8 @@ function conectar() {
 
   socket.on('connect', () => {
     $('conexao').hidden = true; // conexão nova (o servidor nunca reconecta sozinho quem ele derrubou)
-    if (salaAtual) socket.emit('entrar-sala', { codigo: salaAtual, nome: meuNome(), id: meuId, sessao: minhaSessao });
+    if (assistindo) socket.emit('assistir', assistindo);
+    else if (salaAtual) socket.emit('entrar-sala', { codigo: salaAtual, nome: meuNome(), id: meuId, sessao: minhaSessao });
     else if (naFila) socket.emit('fila-entrar', naFila); // caiu a conexão enquanto esperava: volta para a fila
   });
 
@@ -1595,6 +1611,8 @@ function conectar() {
 
   socket.on('sala', (s) => {
     sairDaFila(false);
+    assistindo = null;
+    salaDeTorneio = s.torneio || null;
     const novaSala = salaAtual !== s.codigo || modo !== 'online' || $('jogo').hidden;
     const novaPartida = novaSala || minhaCor !== s.cor || s.historico.length < jogo.history().length;
     modo = 'online';
@@ -1636,7 +1654,9 @@ function conectar() {
     }
     $('codigo-sala').textContent = s.codigo;
     const tempo = s.base ? ` · ⏱ ${s.base / 60000} min${s.incremento ? ` + ${s.incremento / 1000}s` : ''}` : '';
-    $('info').textContent = `Sala ${s.codigo} · Você joga de ${s.cor === 'w' ? 'brancas' : 'pretas'}${tempo}`;
+    $('info').textContent = (s.torneio ? `🏟️ ${s.torneio.nome} · rodada ${s.torneio.rodada} · ` : `Sala ${s.codigo} · `) +
+      `Você joga de ${s.cor === 'w' ? 'brancas' : 'pretas'}${tempo}`;
+    if (s.torneio) $('convite').hidden = true; // no torneio o oponente já foi chamado
 
     renderizar();
     atualizarStatus();
@@ -1658,15 +1678,15 @@ function conectar() {
     if (u) ultima = u;
     selecionada = null;
     destinos = [];
-    const doOponente = u && jogo.turn() === minhaCor;
+    const doOponente = u && (assistindo || jogo.turn() === minhaCor);
     renderizar(doOponente ? animacoesDoLance(u.from, u.to) : []);
     if (doOponente) somDoUltimoLance();
     atualizarStatus();
-    if (doOponente) tentarPremove();
+    if (doOponente && !assistindo) tentarPremove();
   });
 
   socket.on('empate-proposto', async () => {
-    if (!ativo) return;
+    if (!ativo || assistindo) return;
     SONS.msg();
     const r = await perguntar('Seu oponente propôs empate. Você aceita?', 'Aceitar', 'Recusar');
     if (r !== null) socket.emit('responder-empate', r);
@@ -1685,12 +1705,14 @@ function conectar() {
   });
 
   socket.on('revanche-pedida', () => {
+    if (assistindo) return;
     SONS.msg();
     avisar('Seu oponente quer revanche! 🔁');
     $('btn-revanche').textContent = '🔁 Aceitar revanche';
   });
 
   socket.on('oponente-desconectou', ({ segundos }) => {
+    if (assistindo) return avisar(`Um dos jogadores caiu. Esperando ele voltar (até ${segundos}s)...`);
     nomesOnline[oposta(minhaCor)] = { ...(nomesOnline[oposta(minhaCor)] || {}), conectado: false };
     avisar(`Seu oponente caiu. Esperando ele voltar (até ${segundos}s)...`);
     atualizarJogadores();
@@ -1698,11 +1720,12 @@ function conectar() {
 
   socket.on('oponente-voltou', ({ jogadores }) => {
     nomesOnline = jogadores;
-    avisar('Seu oponente voltou! 👋');
+    avisar(assistindo ? 'O jogador voltou! 👋' : 'Seu oponente voltou! 👋');
     atualizarJogadores();
   });
 
   socket.on('oponente-saiu', () => {
+    if (assistindo) return;
     fecharDialogo();
     const op = oposta(minhaCor);
     nomesOnline[op] = null;
@@ -1720,7 +1743,7 @@ function conectar() {
     span.className = 'msg-texto';
     span.textContent = texto;
     div.append(b, span);
-    if (cor !== minhaCor && id) {
+    if (cor !== minhaCor && id && !assistindo) {
       const btn = document.createElement('button');
       btn.className = 'denunciar';
       btn.title = 'Denunciar mensagem';
@@ -1734,6 +1757,64 @@ function conectar() {
   });
 
   // Só chega para o administrador
+  // 👁 Começou a assistir (ou a partida que assisto recomeçou numa revanche)
+  socket.on('assistir-sala', (s) => {
+    const nova = assistindo !== s.codigo || $('jogo').hidden;
+    assistindo = s.codigo;
+    salaAtual = null;
+    modo = 'online';
+    minhaCor = null;
+    nomesOnline = s.jogadores;
+    if (nova) {
+      prepararTelaDeJogo();
+      $('chat-msgs').innerHTML = '';
+      orientacao = 'w';
+    }
+    fimExtra = null;
+    jogo = jogoDoHistorico(s.historico);
+    ativo = s.iniciada && !s.encerrada;
+    relogioDoServidor(s.relogio);
+    if (s.encerrada && s.resultado) aplicarFimOnline(s.resultado, false);
+    $('info').textContent = `👁 Você está assistindo${s.torneio ? ` · 🏟️ ${s.torneio}` : ''} · sala ${s.codigo}`;
+    renderizar();
+    atualizarStatus();
+  });
+
+  socket.on('espectadores', ({ n }) => {
+    const el = $('espectadores');
+    el.textContent = n ? `👁 ${n} assistindo` : '';
+    el.hidden = !n;
+  });
+
+  // 💬 Mensagem privada de um amigo
+  socket.on('mensagem', (m) => {
+    if (!$('dm').hidden && dmAberta?.id === m.de) {
+      adicionarDm({ minha: false, texto: m.texto, quando: m.quando });
+      api('/mensagens/' + m.de).catch(() => {}); // marca como lida
+    } else {
+      SONS.msg();
+      avisar(`💬 ${m.nome}: ${m.texto.slice(0, 60)}`);
+      atualizarNaoLidas();
+      if (!$('perfil').hidden) carregarAmigos();
+    }
+  });
+
+  // 🏟️ Torneios
+  socket.on('torneios-mudou', ({ id }) => {
+    if (!$('torneios').hidden) carregarTorneios(torneioAberto || id);
+  });
+  socket.on('torneio-novo', ({ nome }) => avisar(`🏟️ Novo torneio: ${nome}. Clique em 🏟️ para se inscrever!`));
+  socket.on('torneio-campeao', ({ torneio, nome }) => avisar(`🏆 ${nome} venceu o torneio ${torneio}!`));
+  socket.on('torneio-partida', async ({ torneio, codigo, oponente }) => {
+    SONS.inicio();
+    if (emAndamento() && modo !== 'problema' && !assistindo) {
+      avisar(`🏟️ Sua partida no torneio contra ${oponente} está pronta! Termine esta e abra 🏟️ Torneios.`);
+      return;
+    }
+    const r = await perguntar(`🏟️ ${torneio}: sua partida contra ${oponente} está pronta! Você tem 3 minutos para entrar.`, 'Jogar agora', 'Depois');
+    if (r) jogarPartidaTorneio(codigo);
+  });
+
   // Ganhou uma conquista nova!
   socket.on('conquista', ({ icone, nome, desc }) => {
     SONS.vitoria();
@@ -1820,6 +1901,13 @@ function aplicarFimOnline({ vencedor, motivo }, comemorarAgora) {
   $('btn-revanche').textContent = '🔁 Revanche';
   fecharDialogo();
   const f = TEXTOS_FIM[motivo];
+  if (assistindo) {
+    // Texto neutro para quem só assiste
+    const quem = vencedor ? nomesOnline[vencedor]?.nome || nomeDaCor(vencedor) : null;
+    const NEUTRO = { tempo: 'o tempo do oponente acabou', desistencia: 'o oponente desistiu', abandono: 'o oponente abandonou', acordo: 'empate combinado' };
+    fimExtra = f ? (quem ? `${quem} venceu (${NEUTRO[motivo]}). 🏆` : 'Empate por acordo. 🤝') : null;
+    return atualizarStatus();
+  }
   fimExtra = f ? f(vencedor, minhaCor) : null;
   atualizarStatus();
   if (comemorarAgora && (wasAtivo || motivo !== 'abandono')) comemorar(vencedor);
@@ -1909,7 +1997,8 @@ async function carregarRanking() {
     lista.forEach((j, i) => {
       const tr = document.createElement('tr');
       const medalha = (p) => ['🥇', '🥈', '🥉'][p] || `${p + 1}º`;
-      const celulas = abaRanking === 'geral' ? [medalha(i), linkPerfil(j.nome), eloTexto(j.elo), `${j.v}V ${j.e}E ${j.d}D`]
+      const comAvatar = () => { const s = document.createElement('span'); s.append((j.avatar || '') + ' ', linkPerfil(j.nome)); return s; };
+      const celulas = abaRanking === 'geral' ? [medalha(i), comAvatar(), eloTexto(j.elo), `${j.v}V ${j.e}E ${j.d}D`]
         : abaRanking === 'mes' ? [medalha(i), linkPerfil(j.nome), `+${j.pontos}`, j.partidas]
           : [nomeMes(j.temporada), medalha(j.posicao - 1), linkPerfil(j.nome), `+${j.pontos}`];
       for (const valor of celulas) {
@@ -1942,7 +2031,7 @@ async function abrirPerfilPublico(nome) {
   document.querySelectorAll('.overlay').forEach((o) => (o.hidden = true));
   $('perfil-pub').hidden = false;
   const lg = liga(p.elo);
-  $('pp-nome').textContent = `👤 ${p.nome}`;
+  $('pp-nome').textContent = `${p.avatar || '👤'} ${p.nome}`;
   $('pp-sub').textContent = `${p.jogando ? '🟡 jogando agora' : p.online ? '🟢 online' : '⚪ offline'} · jogando desde ${new Date(p.criado_em).toLocaleDateString('pt-BR')}`;
   $('pp-elo').textContent = eloTexto(p.elo);
   $('pp-liga').textContent = `ELO · liga ${lg.nome}`;
@@ -1963,6 +2052,7 @@ async function abrirPerfilPublico(nome) {
   // Ações: adicionar amigo / desafiar
   const acoes = $('pp-acoes');
   acoes.innerHTML = '';
+  if (p.jogando && p.sala) acoes.appendChild(botaoAdmin('👁 Assistir partida ao vivo', () => assistirPartida(p.sala), 'destaque'));
   if (conta && !p.souEu) {
     if (!p.amizade) {
       acoes.appendChild(botaoAdmin('➕ Adicionar amigo', async () => {
@@ -2379,7 +2469,9 @@ function renovarConexao() {
 
 async function aplicarConta(usuario) {
   conta = usuario;
-  $('btn-conta').textContent = conta ? `👤 ${conta.nome} · ${eloTexto(conta.elo)}` : '👤 Entrar';
+  $('btn-conta').textContent = conta ? `${conta.avatar || '👤'} ${conta.nome} · ${eloTexto(conta.elo)}` : '👤 Entrar';
+  if (conta) atualizarNaoLidas();
+  else $('btn-conta').dataset.badge = '';
   $('btn-admin').hidden = !conta?.admin;
   if (conta?.admin) atualizarBadgeAdmin();
   $('apelido').disabled = !!conta;
@@ -2483,6 +2575,7 @@ async function abrirPerfil() {
   $('st-problemas').textContent = `${resolvidos.size}/${PROBLEMAS.length}`;
   carregarAmigos();
   carregarPartidas();
+  mostrarAvatares();
 }
 $('perfil-fechar').onclick = () => ($('perfil').hidden = true);
 
@@ -2591,11 +2684,14 @@ async function carregarAmigos() {
       const estado = a.jogando ? '🟡 jogando' : a.online ? '🟢 online' : '⚪ offline';
       const botoes = [];
       if (a.online && !a.jogando) botoes.push(['⚔️ Desafiar', () => desafiar(a), true]);
+      if (a.jogando && a.sala) botoes.push(['👁 Assistir', () => assistirPartida(a.sala)]);
+      botoes.push([a.naoLidas ? `💬 ${a.naoLidas}` : '💬', () => abrirDm(a), !!a.naoLidas]);
       botoes.push(['✕', async () => {
         const ok = await perguntarPorCima(`Desfazer a amizade com ${a.nome}?`);
         if (ok) acaoAmigo('/amigos/remover', a.id);
       }]);
       const linha = linhaAmigo(` · ${eloTexto(a.elo)} ELO · ${estado}`, botoes, a.nome);
+      if (a.avatar) linha.firstChild.prepend(a.avatar + ' ');
       linha.lastChild.title = 'Desfazer amizade';
       lista.appendChild(linha);
     }
@@ -2882,6 +2978,290 @@ async function mostrarAmigosParaConvidar() {
     el.hidden = false;
   } catch { /* sem amigos para mostrar */ }
 }
+
+/* ============================================================
+   SOCIAL: avatar, mensagens privadas, assistir e torneios
+============================================================ */
+
+/* ---------- Avatar ---------- */
+let listaAvatares = null;
+async function mostrarAvatares() {
+  const el = $('avatares');
+  if (!listaAvatares) {
+    try { listaAvatares = await api('/avatares'); } catch { return; }
+  }
+  el.innerHTML = '';
+  for (const a of listaAvatares) {
+    const b = document.createElement('button');
+    b.className = 'avatar-op' + (conta?.avatar === a ? ' ativo' : '');
+    b.textContent = a;
+    b.onclick = async () => {
+      try {
+        conta = (await api('/avatar', { avatar: a })).usuario;
+        await aplicarConta(conta);
+        renovarConexao(); // a conexão online passa a mostrar o avatar novo nas próximas partidas
+        mostrarAvatares();
+        avisar(`Avatar trocado para ${a}`);
+      } catch (err) { avisar(err.message); }
+    };
+    el.appendChild(b);
+  }
+}
+
+/* ---------- 💬 Mensagens privadas ---------- */
+let dmAberta = null; // { id, nome }
+function adicionarDm({ minha, texto, quando }) {
+  const d = document.createElement('div');
+  d.className = 'dm-msg' + (minha ? ' minha' : '');
+  const t = document.createElement('span');
+  t.textContent = texto;
+  const h = document.createElement('small');
+  h.textContent = new Date(quando).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  d.append(t, h);
+  $('dm-msgs').appendChild(d);
+  $('dm-msgs').scrollTop = $('dm-msgs').scrollHeight;
+}
+async function abrirDm(amigo) {
+  dmAberta = amigo;
+  $('perfil').hidden = true;
+  $('dm-titulo').textContent = `💬 ${amigo.avatar || ''} ${amigo.nome}`;
+  $('dm-msgs').innerHTML = '<p class="nota">Carregando...</p>';
+  $('dm').hidden = false;
+  try {
+    const msgs = await api('/mensagens/' + amigo.id);
+    $('dm-msgs').innerHTML = msgs.length ? '' : '<p class="nota">Nenhuma mensagem ainda. Diga oi! 👋</p>';
+    msgs.forEach(adicionarDm);
+  } catch (err) {
+    $('dm-msgs').textContent = err.message;
+  }
+  atualizarNaoLidas();
+  $('dm-texto').focus();
+}
+$('dm-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const texto = $('dm-texto').value.trim();
+  if (!texto || !dmAberta) return;
+  $('dm-texto').value = '';
+  try {
+    if ($('dm-msgs').querySelector('.nota')) $('dm-msgs').innerHTML = '';
+    adicionarDm(await api('/mensagens', { para: dmAberta.id, texto }));
+  } catch (err) {
+    avisar(err.message);
+  }
+};
+$('dm-fechar').onclick = () => {
+  $('dm').hidden = true;
+  dmAberta = null;
+  abrirPerfil();
+};
+async function atualizarNaoLidas() {
+  if (!conta) return;
+  try {
+    const { n } = await api('/mensagens-nao-lidas');
+    $('btn-conta').dataset.badge = n || '';
+  } catch { /* sem badge */ }
+}
+
+/* ---------- 👁 Assistir ---------- */
+function assistirPartida(codigo) {
+  document.querySelectorAll('.overlay').forEach((o) => (o.hidden = true));
+  if (salaAtual && socket) socket.emit('sair-sala');
+  salaAtual = null;
+  assistindo = codigo;
+  const s = conectar();
+  if (s.connected) s.emit('assistir', codigo);
+}
+
+async function carregarAoVivo() {
+  const el = $('ao-vivo-lista');
+  el.textContent = 'Carregando...';
+  try {
+    const lista = await (await fetch('/api/ao-vivo')).json();
+    el.innerHTML = '';
+    if (!lista.length) {
+      el.innerHTML = '<p class="nota">Nenhuma partida acontecendo agora. Que tal começar uma? ⚡</p>';
+      return;
+    }
+    for (const p of lista) {
+      const d = document.createElement('div');
+      d.className = 'ao-vivo-item';
+      const t = document.createElement('div');
+      const nomeJ = (j) => `${j.avatar ? j.avatar + ' ' : ''}${j.nome}${j.elo != null ? ` (${j.elo})` : ''}`;
+      const b = document.createElement('b');
+      b.textContent = `${nomeJ(p.brancas)}  ×  ${nomeJ(p.pretas)}`;
+      const s = document.createElement('small');
+      s.className = 'nota';
+      s.textContent = `${p.torneio ? '🏟️ ' + p.torneio + ' · ' : ''}${p.lances} lances · ${p.relogio}${p.espectadores ? ` · 👁 ${p.espectadores}` : ''}`;
+      t.append(b, s);
+      d.append(t, botaoAdmin('👁 Assistir', () => assistirPartida(p.codigo), 'destaque'));
+      el.appendChild(d);
+    }
+  } catch {
+    el.textContent = 'Não foi possível carregar.';
+  }
+}
+$('btn-ao-vivo').onclick = () => {
+  $('ao-vivo').hidden = false;
+  carregarAoVivo();
+};
+$('ao-vivo-atualizar').onclick = carregarAoVivo;
+$('ao-vivo-fechar').onclick = () => ($('ao-vivo').hidden = true);
+
+/* ---------- 🏟️ Torneios ---------- */
+let torneioAberto = null;
+function jogarPartidaTorneio(codigo) {
+  document.querySelectorAll('.overlay').forEach((o) => (o.hidden = true));
+  assistindo = null;
+  escolherModo('online');
+  entrarNaSala(codigo);
+}
+
+async function carregarTorneios(abrirId) {
+  const lista = $('torneios-lista');
+  $('torneio-criar').hidden = !conta?.admin;
+  try {
+    const ts = await api('/torneios');
+    lista.innerHTML = '';
+    if (!ts.length) lista.innerHTML = '<p class="nota">Nenhum torneio ainda. ' + (conta?.admin ? 'Crie o primeiro acima!' : 'Fique de olho: o administrador cria os torneios.') + '</p>';
+    const EST = { inscricoes: '🟢 inscrições abertas', andamento: '⚔️ em andamento', terminado: '🏁 terminado' };
+    for (const t of ts) {
+      const b = document.createElement('button');
+      b.className = 'torneio-item' + (t.id === abrirId ? ' ativo' : '');
+      const n = document.createElement('b');
+      n.textContent = t.nome + (t.inscrito ? ' ✅' : '');
+      const s = document.createElement('small');
+      s.textContent = `${EST[t.estado]} · ${t.inscritos}/${t.maximo} · ⏱ ${t.minutos}${t.incremento ? '+' + t.incremento : ''} min` + (t.vencedor_nome ? ` · 🏆 ${t.vencedor_nome}` : '');
+      b.append(n, s);
+      b.onclick = () => carregarTorneios(t.id);
+      lista.appendChild(b);
+    }
+    const id = abrirId || ts[0]?.id;
+    if (id) await mostrarTorneio(id);
+    else $('torneio-detalhe').innerHTML = '';
+  } catch (err) {
+    lista.textContent = err.message;
+  }
+}
+
+async function mostrarTorneio(id) {
+  torneioAberto = id;
+  const el = $('torneio-detalhe');
+  let t;
+  try { t = await api('/torneios/' + id); } catch (err) { el.textContent = err.message; return; }
+  el.innerHTML = '';
+  const h = document.createElement('h3');
+  h.textContent = `🏟️ ${t.nome}`;
+  const info = document.createElement('p');
+  info.className = 'nota';
+  info.textContent = `Mata-mata · ⏱ ${t.minutos} min${t.incremento ? ` + ${t.incremento}s` : ''} · até ${t.maximo} jogadores · ` +
+    'empate: quem jogou de pretas avança · quem não aparecer em 3 minutos perde por W.O.';
+  el.append(h, info);
+  if (t.vencedor_nome) {
+    const c = document.createElement('p');
+    c.className = 'campeao';
+    c.textContent = `🏆 Campeão: ${t.vencedor_nome}`;
+    el.appendChild(c);
+  }
+
+  // Botões
+  const acoes = document.createElement('div');
+  acoes.className = 'linha';
+  const inscrito = t.jogadores.some((j) => j.usuario_id === t.euId);
+  const acao = (caminho, confirmar) => async () => {
+    if (confirmar) {
+      $('torneios').hidden = true;
+      const ok = await perguntar(confirmar, 'Sim', 'Não');
+      $('torneios').hidden = false;
+      if (!ok) return;
+    }
+    try { avisar((await api(`/torneios/${id}/${caminho}`, {})).texto); } catch (err) { avisar(err.message); }
+    carregarTorneios(caminho === 'cancelar' ? null : id);
+  };
+  if (t.estado === 'inscricoes') {
+    if (!conta) acoes.appendChild(Object.assign(document.createElement('span'), { className: 'nota', textContent: 'Entre na sua conta para se inscrever.' }));
+    else if (inscrito) acoes.appendChild(botaoAdmin('Sair do torneio', acao('sair')));
+    else if (t.jogadores.length < t.maximo) acoes.appendChild(botaoAdmin('✍️ Inscrever-me', acao('entrar'), 'destaque'));
+    if (t.admin) acoes.appendChild(botaoAdmin('▶ Começar torneio', acao('comecar', `Começar "${t.nome}" com ${t.jogadores.length} jogadores? As inscrições fecham.`), 'destaque'));
+  }
+  if (t.admin && t.estado !== 'terminado') acoes.appendChild(botaoAdmin('Cancelar torneio', acao('cancelar', `Cancelar "${t.nome}"? Isso apaga o torneio.`), 'perigo'));
+  el.appendChild(acoes);
+
+  if (t.estado === 'inscricoes') {
+    const h2 = document.createElement('h3');
+    h2.textContent = `✍️ Inscritos (${t.jogadores.length}/${t.maximo})`;
+    const ul = document.createElement('div');
+    ul.className = 'inscritos';
+    if (!t.jogadores.length) ul.textContent = 'Ninguém ainda. Seja o primeiro!';
+    for (const j of t.jogadores) ul.appendChild(linkPerfil(j.nome));
+    el.append(h2, ul);
+    return;
+  }
+
+  // Chaveamento: uma coluna por rodada
+  const rodadas = Math.max(...t.partidas.map((p) => p.rodada));
+  const primeira = t.partidas.filter((p) => p.rodada === 1).length;
+  const total = Math.round(Math.log2(primeira * 2));
+  const chave = document.createElement('div');
+  chave.className = 'chave';
+  const nomeRodada = (r) => (r === total ? 'Final' : r === total - 1 ? 'Semifinal' : r === total - 2 ? 'Quartas' : `Rodada ${r}`);
+  for (let r = 1; r <= Math.max(rodadas, total); r++) {
+    const col = document.createElement('div');
+    col.className = 'chave-col';
+    const tit = document.createElement('small');
+    tit.textContent = nomeRodada(r);
+    col.appendChild(tit);
+    const partidas = t.partidas.filter((p) => p.rodada === r);
+    const qtd = primeira / 2 ** (r - 1);
+    for (let pos = 0; pos < qtd; pos++) {
+      const p = partidas.find((x) => x.posicao === pos);
+      const card = document.createElement('div');
+      card.className = 'chave-jogo' + (p?.estado === 'jogando' ? ' ao-vivo' : '');
+      if (!p) {
+        card.textContent = 'aguardando...';
+        card.classList.add('vazio');
+      } else {
+        for (const [id2, nome] of [[p.branco_id, p.branco_nome], [p.preto_id, p.preto_nome]]) {
+          const linha = document.createElement('div');
+          linha.className = 'chave-nome' + (p.vencedor_id && p.vencedor_id === id2 ? ' venceu' : '') + (p.vencedor_id && id2 && p.vencedor_id !== id2 ? ' perdeu' : '');
+          linha.textContent = nome || '— folga —';
+          card.appendChild(linha);
+        }
+        if (p.motivo) {
+          const m = document.createElement('small');
+          m.textContent = MOTIVOS[p.motivo] || p.motivo;
+          card.appendChild(m);
+        }
+        if (p.estado === 'jogando' && p.sala) {
+          const souJogador = t.euId && (p.branco_id === t.euId || p.preto_id === t.euId);
+          card.appendChild(souJogador
+            ? botaoAdmin('▶ Jogar minha partida', () => jogarPartidaTorneio(p.sala), 'destaque')
+            : botaoAdmin('👁 Assistir', () => assistirPartida(p.sala)));
+        }
+      }
+      col.appendChild(card);
+    }
+    chave.appendChild(col);
+  }
+  el.appendChild(chave);
+}
+
+$('btn-torneios').onclick = () => {
+  $('torneios').hidden = false;
+  carregarTorneios(torneioAberto);
+};
+$('torneios-fechar').onclick = () => ($('torneios').hidden = true);
+$('torneio-criar').onsubmit = async (e) => {
+  e.preventDefault();
+  const [minutos, incremento] = $('tn-relogio').value.split('+').map(Number);
+  try {
+    const r = await api('/torneios', { nome: $('tn-nome').value.trim(), minutos, incremento, maximo: Number($('tn-maximo').value) });
+    $('tn-nome').value = '';
+    avisar(r.texto);
+    carregarTorneios(r.id);
+  } catch (err) {
+    avisar(err.message);
+  }
+};
 
 /* ============================================================
    INÍCIO

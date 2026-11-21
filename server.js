@@ -6,6 +6,8 @@ import { Server } from 'socket.io';
 import { Chess } from 'chess.js';
 import { prepararBanco } from './db.js';
 import { rotasDeContas, lerCookie, usuarioDaSessao, registrarPartida, saoAmigos, registrarDenuncia, fecharTemporadas } from './contas.js';
+import { iniciarTorneios } from './torneios.js';
+import { filtrarTexto } from './filtro.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -26,15 +28,13 @@ const abasDoUsuario = new Map(); // usuarioId -> Set(socketId)
 
 function presenca(usuarioId) {
   const online = (abasDoUsuario.get(usuarioId)?.size || 0) > 0;
-  let jogando = false;
-  for (const sala of salas.values()) {
+  for (const [codigo, sala] of salas) {
     if (sala.iniciada && !sala.encerrada &&
         (sala.jogadores.w?.usuarioId === usuarioId || sala.jogadores.b?.usuarioId === usuarioId)) {
-      jogando = true;
-      break;
+      return { online, jogando: true, sala: codigo }; // "sala" serve para assistir
     }
   }
-  return { online, jogando };
+  return { online, jogando: false, sala: null };
 }
 
 const avisar = (usuarioId, evento, dados) => io.to(`u:${usuarioId}`).emit(evento, dados);
@@ -60,6 +60,28 @@ function painel() {
 function desconectar(usuarioId) {
   io.in(`u:${usuarioId}`).disconnectSockets(true);
 }
+
+// Partidas acontecendo agora (para assistir)
+app.get('/api/ao-vivo', (req, res) => {
+  const lista = [];
+  for (const [codigo, sala] of salas) {
+    if (!sala.iniciada || sala.encerrada || !sala.jogadores.w || !sala.jogadores.b) continue;
+    const j = (c) => ({ nome: sala.jogadores[c].nome, elo: sala.jogadores[c].elo ?? null, avatar: sala.jogadores[c].avatar || null });
+    lista.push({
+      codigo, brancas: j('w'), pretas: j('b'), lances: sala.chess.history().length,
+      relogio: sala.base ? `${sala.base / 60000} min` : 'sem relógio',
+      torneio: sala.torneio?.nome || null,
+      espectadores: io.sockets.adapter.rooms.get(`ver:${codigo}`)?.size || 0,
+    });
+  }
+  // As com jogadores mais fortes primeiro
+  lista.sort((a, b) => (b.brancas.elo || 0) + (b.pretas.elo || 0) - (a.brancas.elo || 0) - (a.pretas.elo || 0));
+  res.json(lista.slice(0, 30));
+});
+
+// Torneios (o módulo é criado mais abaixo, depois das salas)
+let torneios = null;
+app.use('/api/torneios', (req, res, next) => (torneios ? torneios.rotas(req, res, next) : res.status(503).json({ erro: 'Iniciando...' })));
 
 app.use('/api', rotasDeContas({ presenca, avisar, painel, desconectar }));
 app.get('/:arquivo', (req, res, next) => {
@@ -165,9 +187,26 @@ function infoJogadores(sala) {
   const info = {};
   for (const cor of ['w', 'b']) {
     const j = sala.jogadores[cor];
-    info[cor] = j ? { nome: j.nome, conectado: j.conectado, conta: !!j.usuarioId, usuarioId: j.usuarioId, elo: j.elo ?? null } : null;
+    info[cor] = j ? { nome: j.nome, conectado: j.conectado, conta: !!j.usuarioId, usuarioId: j.usuarioId, elo: j.elo ?? null, avatar: j.avatar || null } : null;
   }
   return info;
+}
+
+// Estado para quem está só ASSISTINDO
+function estadoEspectador(sala, codigo) {
+  return {
+    codigo,
+    historico: sala.chess.history(),
+    jogadores: infoJogadores(sala),
+    relogio: relogioAgora(sala),
+    iniciada: sala.iniciada,
+    encerrada: sala.encerrada,
+    resultado: sala.resultado,
+    torneio: sala.torneio?.nome || null,
+  };
+}
+function contarEspectadores(codigo) {
+  io.to(codigo).emit('espectadores', { n: io.sockets.adapter.rooms.get(`ver:${codigo}`)?.size || 0 });
 }
 
 // Estado completo, mandado a quem entra/reconecta
@@ -185,6 +224,7 @@ function enviarSala(sala, codigo, cor) {
     resultado: sala.resultado,
     base: sala.base,
     incremento: sala.incremento,
+    torneio: sala.torneio ? { nome: sala.torneio.nome, rodada: sala.torneio.rodada } : null,
   });
 }
 
@@ -213,6 +253,7 @@ function finalizar(sala, codigo, resultado) {
   sala.revanche = new Set();
   clearTimeout(sala.timerTempo);
   registrarNoRanking(sala, codigo, resultado.vencedor, resultado.motivo);
+  torneios?.aoTerminar(sala, resultado.vencedor, resultado.motivo);
   io.to(codigo).emit('fim', { ...resultado, relogio: relogioAgora(sala), jogadores: infoJogadores(sala) });
 }
 
@@ -234,6 +275,7 @@ function comecarPartida(sala, codigo) {
   sala.tempo = { w: sala.base, b: sala.base };
   sala.turnoInicio = Date.now();
   agendarTempo(sala, codigo);
+  io.to(`ver:${codigo}`).emit('assistir-sala', estadoEspectador(sala, codigo)); // revanche: quem assiste vê a nova
 }
 
 function apagarSala(codigo) {
@@ -299,6 +341,7 @@ io.on('connection', (socket) => {
   const novoJogador = (id, sessao, nome) => ({
     id: String(id || socket.id).slice(0, 64),
     usuarioId: usuario?.id || null,
+    avatar: usuario?.avatar || null,
     elo: usuario ? usuario.elo : null,
     sessao: String(sessao || socket.id).slice(0, 64),
     nome: usuario ? usuario.nome : limparNome(nome),
@@ -380,8 +423,9 @@ io.on('connection', (socket) => {
 
     if (socket.data.sala && socket.data.sala !== codigo) jogadorSaiu(socket, true);
 
-    // Reconexão: esta aba já tem um lugar nesta sala
-    let cor = ['w', 'b'].find((c) => sala.jogadores[c]?.sessao === minhaSessao);
+    // Reconexão: esta aba (ou, em torneio, esta conta) já tem um lugar nesta sala
+    let cor = ['w', 'b'].find((c) => sala.jogadores[c]?.sessao === minhaSessao ||
+      (sala.reservado && usuario && sala.jogadores[c]?.usuarioId === usuario.id));
     if (cor) {
       const j = sala.jogadores[cor];
       if (j.socket && j.socket !== socket.id) io.sockets.sockets.get(j.socket)?.disconnect(true);
@@ -397,8 +441,14 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (sala.iniciada) return socket.emit('erro-sala', 'Essa partida já começou.');
-    cor = !sala.jogadores.w ? 'w' : !sala.jogadores.b ? 'b' : null;
+    if (sala.iniciada) return socket.emit('erro-sala', 'Essa partida já começou. Você pode assistir pelo botão 👁 Assistir.');
+    if (sala.reservado) {
+      // Partida de torneio: só os dois sorteados podem sentar, cada um na sua cor
+      cor = usuario ? torneios.corReservada(sala, usuario.id) : null;
+      if (!cor) return socket.emit('erro-sala', 'Esta é uma partida de torneio entre outros jogadores. Você pode assistir quando começar.');
+    } else {
+      cor = !sala.jogadores.w ? 'w' : !sala.jogadores.b ? 'b' : null;
+    }
     if (!cor) return socket.emit('erro-sala', 'Essa sala já está cheia.');
     sala.jogadores[cor] = novoJogador(id, sessao, nome);
     socket.join(codigo);
@@ -479,6 +529,7 @@ io.on('connection', (socket) => {
     const codigo = socket.data.sala;
     const sala = salas.get(codigo);
     if (!sala || !sala.encerrada) return;
+    if (sala.torneio) return socket.emit('erro-sala', 'No torneio não tem revanche: o resultado já conta para o chaveamento.');
     if (!sala.jogadores.w?.conectado || !sala.jogadores.b?.conectado) {
       return socket.emit('erro-sala', 'O oponente não está mais na sala.');
     }
@@ -519,8 +570,33 @@ io.on('connection', (socket) => {
     };
     sala.mensagens.push(msg);
     if (sala.mensagens.length > 100) sala.mensagens.shift();
-    io.to(codigo).emit('chat', { id: msg.id, nome: msg.nome, cor: msg.cor, texto });
+    // Todo mundo recebe a versão com palavrões censurados (o admin vê o original nas denúncias)
+    io.to(codigo).emit('chat', { id: msg.id, nome: msg.nome, cor: msg.cor, texto: filtrarTexto(texto), usuarioId: msg.usuarioId });
   });
+
+  /* ---------- 👁 Assistir uma partida ---------- */
+  function pararDeAssistir() {
+    const codigo = socket.data.assistindo;
+    if (!codigo) return;
+    socket.leave(codigo);
+    socket.leave(`ver:${codigo}`);
+    socket.data.assistindo = null;
+    contarEspectadores(codigo);
+  }
+  socket.on('assistir', (codigoBruto) => {
+    const codigo = String(codigoBruto || '').trim().toUpperCase();
+    const sala = salas.get(codigo);
+    if (!sala || !sala.iniciada) return socket.emit('erro-sala', 'Essa partida não está acontecendo agora.');
+    if (socket.data.sala) jogadorSaiu(socket, true);
+    tirarDaFila(socket.id);
+    pararDeAssistir();
+    socket.join(codigo); // recebe os lances, o chat e o fim da partida
+    socket.join(`ver:${codigo}`);
+    socket.data.assistindo = codigo;
+    socket.emit('assistir-sala', estadoEspectador(sala, codigo));
+    contarEspectadores(codigo);
+  });
+  socket.on('parar-assistir', pararDeAssistir);
 
   // Denunciar uma mensagem do chat
   let denunciasRecentes = [];
@@ -562,10 +638,12 @@ io.on('connection', (socket) => {
 
   socket.on('sair-sala', () => {
     tirarDaFila(socket.id);
+    pararDeAssistir();
     jogadorSaiu(socket, true);
   });
   socket.on('disconnect', () => {
     tirarDaFila(socket.id);
+    pararDeAssistir();
     jogadorSaiu(socket, false);
     if (usuario) {
       const abas = abasDoUsuario.get(usuario.id);
@@ -575,9 +653,12 @@ io.on('connection', (socket) => {
   });
 });
 
+torneios = iniciarTorneios({ io, salas, criarSala, apagarSala, avisar });
+
 const PORTA = process.env.PORT || 3000;
 try {
   await prepararBanco();
+  await torneios.retomar(); // reabre partidas de torneio interrompidas por um reinício
   // Fecha o pódio dos meses que acabaram (e confere de hora em hora)
   const fechar = () => fecharTemporadas().catch((e) => console.error('Erro ao fechar temporada:', e.message));
   fechar();

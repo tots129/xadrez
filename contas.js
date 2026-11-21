@@ -2,6 +2,7 @@
 import crypto from 'crypto';
 import express from 'express';
 import { q, bancoAtivo } from './db.js';
+import { filtrarTexto } from './filtro.js';
 
 const COOKIE = 'xadrez_sessao';
 const DURACAO_SESSAO_DIAS = 30;
@@ -66,7 +67,7 @@ export function lerCookie(cabecalho, nome = COOKIE) {
 export async function usuarioDaSessao(token) {
   if (!token || !bancoAtivo()) return null;
   const rows = await q(
-    `SELECT u.id, u.nome, u.email, round(u.elo)::int AS elo FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
+    `SELECT u.id, u.nome, u.email, u.avatar, round(u.elo)::int AS elo FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
      WHERE s.token = $1 AND s.expira_em > now() AND NOT u.bloqueado`,
     [token]
   );
@@ -105,7 +106,7 @@ setInterval(() => {
 /* ---------- Perfil ---------- */
 async function perfil(id) {
   const [u] = await q(
-    `SELECT id, nome, email, round(elo)::int AS elo, vitorias, derrotas, empates,
+    `SELECT id, nome, email, avatar, round(elo)::int AS elo, vitorias, derrotas, empates,
             bot_vitorias, bot_derrotas, bot_empates, problemas, tema,
             to_char(problema_dia_data, 'YYYY-MM-DD') AS problema_dia_data, problema_dia_seq
      FROM usuarios WHERE id = $1`,
@@ -136,7 +137,12 @@ export const CONQUISTAS = {
   problema_dia_7: { nome: 'Semana perfeita', icone: '📅', desc: 'Resolveu o problema do dia 7 dias seguidos' },
   amigos_5: { nome: 'Popular', icone: '👥', desc: 'Tem 5 amigos' },
   campeao: { nome: 'Campeão do mês', icone: '🏆', desc: 'Terminou um mês em 1º lugar no ranking mensal' },
+  torneio: { nome: 'Campeão de torneio', icone: '🏟️', desc: 'Venceu um torneio' },
 };
+
+// Avatares que dá para escolher
+export const AVATARES = ['🦁', '🐯', '🐺', '🦊', '🐼', '🐨', '🐸', '🐵', '🦄', '🐲', '🦉', '🦅', '🐢', '🐬', '🐙', '🐝',
+  '🤖', '👽', '👑', '🧙', '🥷', '🦸', '🧛', '🤠', '😎', '🔥', '⚡', '🌟', '💎', '🎯', '♞', '♛'];
 
 export async function darConquista(usuarioId, codigo) {
   if (!usuarioId || !CONQUISTAS[codigo] || !bancoAtivo()) return;
@@ -502,7 +508,7 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
       return res.json(rows.map(({ id, ...x }) => x));
     }
     const rows = await q(
-      `SELECT nome, round(elo)::int AS elo, vitorias AS v, derrotas AS d, empates AS e
+      `SELECT nome, avatar, round(elo)::int AS elo, vitorias AS v, derrotas AS d, empates AS e
        FROM usuarios WHERE vitorias + derrotas + empates > 0 AND NOT bloqueado ORDER BY elo DESC LIMIT 20`
     );
     res.json(rows);
@@ -514,11 +520,56 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
   });
 
   r.get('/conquistas', (req, res) => res.json(CONQUISTAS));
+  r.get('/avatares', (req, res) => res.json(AVATARES));
+
+  r.post('/avatar', precisaLogin, async (req, res) => {
+    const avatar = String(req.body?.avatar || '');
+    if (!AVATARES.includes(avatar)) return res.status(400).json({ erro: 'Avatar inválido.' });
+    await q('UPDATE usuarios SET avatar = $2 WHERE id = $1', [req.usuario.id, avatar]);
+    res.json({ usuario: await perfil(req.usuario.id) });
+  });
+
+  /* ---------- Mensagens privadas (só entre amigos) ---------- */
+  r.get('/mensagens/:amigo', precisaLogin, async (req, res) => {
+    const eu = req.usuario.id;
+    const outro = Number(req.params.amigo) || 0;
+    if (!(await saoAmigos(eu, outro))) return res.status(403).json({ erro: 'Vocês precisam ser amigos para conversar.' });
+    const rows = await q(
+      `SELECT id, de, texto, criado_em FROM (
+         SELECT * FROM mensagens WHERE (de = $1 AND para = $2) OR (de = $2 AND para = $1) ORDER BY criado_em DESC LIMIT 80
+       ) x ORDER BY criado_em`,
+      [eu, outro]
+    );
+    await q('UPDATE mensagens SET lida = true WHERE de = $2 AND para = $1 AND NOT lida', [eu, outro]);
+    res.json(rows.map((m) => ({ id: m.id, minha: m.de === eu, texto: m.texto, quando: m.criado_em })));
+  });
+
+  const ultimasMsgs = new Map(); // usuarioId -> [horários] (contra spam)
+  r.post('/mensagens', precisaLogin, async (req, res) => {
+    const eu = req.usuario.id;
+    const para = Number(req.body?.para) || 0;
+    const texto = filtrarTexto(String(req.body?.texto || '').trim().slice(0, 500));
+    if (!texto) return res.status(400).json({ erro: 'Escreva uma mensagem.' });
+    if (!(await saoAmigos(eu, para))) return res.status(403).json({ erro: 'Vocês precisam ser amigos para conversar.' });
+    const agora = Date.now();
+    const recentes = (ultimasMsgs.get(eu) || []).filter((t) => agora - t < 60_000);
+    if (recentes.length >= 20) return res.status(429).json({ erro: 'Calma! Muitas mensagens em pouco tempo.' });
+    recentes.push(agora);
+    ultimasMsgs.set(eu, recentes);
+    const [m] = await q('INSERT INTO mensagens (de, para, texto) VALUES ($1, $2, $3) RETURNING id, criado_em', [eu, para, texto]);
+    avisar(para, 'mensagem', { de: eu, nome: req.usuario.nome, avatar: req.usuario.avatar, texto, id: m.id, quando: m.criado_em });
+    res.json({ id: m.id, minha: true, texto, quando: m.criado_em });
+  });
+
+  r.get('/mensagens-nao-lidas', precisaLogin, async (req, res) => {
+    const [r2] = await q('SELECT count(*)::int AS n FROM mensagens WHERE para = $1 AND NOT lida', [req.usuario.id]);
+    res.json({ n: r2.n });
+  });
 
   // Perfil público de um jogador (por apelido)
   r.get('/perfil/:nome', async (req, res) => {
     const [u] = await q(
-      `SELECT id, nome, round(elo)::int AS elo, vitorias, derrotas, empates, sequencia,
+      `SELECT id, nome, avatar, round(elo)::int AS elo, vitorias, derrotas, empates, sequencia,
               bot_vitorias, cardinality(problemas) AS problemas, criado_em, bloqueado
        FROM usuarios WHERE lower(nome) = lower($1)`,
       [String(req.params.nome || '').slice(0, 32)]
@@ -557,7 +608,8 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
   r.get('/amigos', precisaLogin, async (req, res) => {
     const eu = req.usuario.id;
     const rows = await q(
-      `SELECT a.de, a.para, a.aceita, u.id, u.nome, round(u.elo)::int AS elo
+      `SELECT a.de, a.para, a.aceita, u.id, u.nome, u.avatar, round(u.elo)::int AS elo,
+              (SELECT count(*)::int FROM mensagens m WHERE m.de = u.id AND m.para = $1 AND NOT m.lida) AS nao_lidas
        FROM amizades a JOIN usuarios u ON u.id = CASE WHEN a.de = $1 THEN a.para ELSE a.de END
        WHERE a.de = $1 OR a.para = $1 ORDER BY lower(u.nome)`,
       [eu]
@@ -566,7 +618,7 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     const recebidos = [];
     const enviados = [];
     for (const l of rows) {
-      const item = { id: l.id, nome: l.nome, elo: l.elo };
+      const item = { id: l.id, nome: l.nome, elo: l.elo, avatar: l.avatar, naoLidas: l.nao_lidas };
       if (l.aceita) amigos.push({ ...item, ...presenca(l.id) });
       else if (l.para === eu) recebidos.push(item);
       else enviados.push(item);

@@ -464,6 +464,51 @@ button.conta-btn { padding: 6px 12px; font-size: 14px; font-weight: 600; max-wid
 .ligas { margin: 4px 0 10px; color: var(--suave); font-size: 13px; line-height: 1.8; }
 .stats small#st-elo-liga { text-align: center; }
 
+/* ---------- Social: avatar, mensagens, ao vivo, torneios ---------- */
+#btn-conta { position: relative; }
+#btn-conta[data-badge]:not([data-badge=''])::after {
+  content: attr(data-badge); position: absolute; top: -6px; right: -6px; min-width: 18px; padding: 0 5px;
+  border-radius: 999px; background: #d64545; color: #fff; font-size: 11px; line-height: 18px;
+}
+.avatares { display: grid; grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); gap: 6px; }
+.avatar-op { font-size: 22px; padding: 6px 0; }
+.avatar-op.ativo { border-color: var(--verde); background: #2f3d3a; }
+.dm-caixa { width: min(94vw, 460px); height: min(80vh, 600px); display: flex; flex-direction: column; text-align: left; }
+.dm-msgs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 10px 2px; }
+.dm-msg { max-width: 80%; padding: 7px 11px; border-radius: 12px; background: var(--card2); align-self: flex-start; overflow-wrap: anywhere; }
+.dm-msg.minha { align-self: flex-end; background: var(--verde2); }
+.dm-msg small { display: block; font-size: 10px; opacity: 0.6; margin-top: 2px; }
+.ao-vivo-lista { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ao-vivo-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border-radius: 10px; background: var(--bg2); }
+.ao-vivo-item b { display: block; }
+#espectadores { margin: -4px 0 6px; }
+.torneios-caixa { width: min(96vw, 1100px); height: min(92vh, 820px); display: flex; flex-direction: column; text-align: left; padding: 16px; }
+.torneio-criar { margin: 10px 0; padding: 10px; border-radius: 10px; background: var(--bg2); }
+.torneios-corpo { flex: 1; display: flex; gap: 14px; min-height: 0; margin-top: 10px; }
+.torneios-lista { width: 250px; flex-shrink: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.torneio-item { text-align: left; display: flex; flex-direction: column; gap: 2px; }
+.torneio-item small { color: var(--suave); font-size: 12px; }
+.torneio-item.ativo { border-color: var(--verde); background: #2f3d3a; }
+.torneio-detalhe { flex: 1; overflow: auto; }
+.torneio-detalhe h3 { margin-top: 0; }
+.campeao { font-size: 20px; font-weight: 700; color: #ffd76a; }
+.inscritos { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.chave { display: flex; gap: 14px; margin-top: 14px; align-items: stretch; }
+.chave-col { display: flex; flex-direction: column; justify-content: space-around; gap: 10px; min-width: 170px; }
+.chave-col > small { color: var(--suave); text-align: center; font-weight: 700; }
+.chave-jogo { padding: 8px; border-radius: 8px; background: var(--card2); border: 1px solid var(--borda); display: flex; flex-direction: column; gap: 3px; }
+.chave-jogo.ao-vivo { border-color: #d4a93a; box-shadow: 0 0 0 2px rgba(212, 169, 58, 0.25); }
+.chave-jogo.vazio { color: var(--suave); font-size: 13px; text-align: center; opacity: 0.6; }
+.chave-jogo small { color: var(--suave); font-size: 11px; }
+.chave-jogo button { margin-top: 4px; padding: 4px 8px; font-size: 12px; }
+.chave-nome.venceu { color: #9be59a; font-weight: 700; }
+.chave-nome.venceu::after { content: ' ✓'; }
+.chave-nome.perdeu { opacity: 0.5; text-decoration: line-through; }
+@media (max-width: 700px) {
+  .torneios-corpo { flex-direction: column; }
+  .torneios-lista { width: auto; max-height: 160px; }
+}
+
 /* ---------- Problemas e aulas ---------- */
 .opcoes.coluna { flex-direction: column; align-items: stretch; }
 .linha.centro { justify-content: center; align-items: center; }

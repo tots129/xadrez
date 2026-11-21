@@ -28,6 +28,8 @@
         <button id="btn-som" class="icone" title="Desligar sons">🔊</button>
         <button id="btn-ranking" class="icone" title="Ranking">🏆</button>
         <button id="btn-aulas" class="icone" title="Aulas de xadrez">📚</button>
+        <button id="btn-torneios" class="icone" title="Torneios">🏟️</button>
+        <button id="btn-ao-vivo" class="icone" title="Assistir partidas ao vivo">👁</button>
         <button id="btn-conta" class="conta-btn" hidden>👤 Entrar</button>
         <button id="btn-admin" class="conta-btn" hidden>🛠️ Admin</button>
       </div>
@@ -158,6 +160,7 @@
       <div id="status"></div>
       <div id="elo-mudanca" hidden></div>
       <div id="info"></div>
+      <div id="espectadores" class="nota" hidden></div>
 
       <div id="convite" class="convite" hidden>
         <span>Código da sala: <b id="codigo-sala"></b></span>
@@ -285,6 +288,11 @@
         <div><b id="st-problemas"></b><small>problemas</small></div>
       </div>
 
+      <details class="trocar-senha">
+        <summary>🙂 Escolher avatar</summary>
+        <div id="avatares" class="avatares"></div>
+      </details>
+
       <button id="btn-meu-perfil" class="largo">📈 Ver meu perfil completo (gráfico de ELO e conquistas)</button>
 
       <h3>👥 Amigos</h3>
@@ -320,6 +328,64 @@
       <div class="dialogo-botoes">
         <button id="btn-sair-conta">Sair da conta</button>
         <button id="perfil-fechar" class="destaque">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mensagens privadas -->
+  <div id="dm" class="overlay" hidden>
+    <div class="caixa dm-caixa">
+      <div class="admin-topo">
+        <p id="dm-titulo">💬</p>
+        <button id="dm-fechar" class="destaque">Fechar</button>
+      </div>
+      <div id="dm-msgs" class="dm-msgs"></div>
+      <form id="dm-form" class="chat-form">
+        <input id="dm-texto" maxlength="500" placeholder="Escreva uma mensagem..." autocomplete="off" />
+        <button type="submit" class="destaque">Enviar</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Partidas ao vivo -->
+  <div id="ao-vivo" class="overlay" hidden>
+    <div class="caixa perfil-caixa">
+      <div class="admin-topo">
+        <p>👁 Partidas acontecendo agora</p>
+        <button id="ao-vivo-atualizar" title="Atualizar">↻</button>
+        <button id="ao-vivo-fechar" class="destaque">Fechar</button>
+      </div>
+      <div id="ao-vivo-lista" class="ao-vivo-lista"></div>
+    </div>
+  </div>
+
+  <!-- Torneios -->
+  <div id="torneios" class="overlay" hidden>
+    <div class="caixa torneios-caixa">
+      <div class="admin-topo">
+        <p>🏟️ Torneios</p>
+        <button id="torneios-fechar" class="destaque">Fechar</button>
+      </div>
+      <form id="torneio-criar" class="linha torneio-criar" hidden>
+        <input id="tn-nome" maxlength="60" placeholder="Nome do torneio" />
+        <select id="tn-relogio" aria-label="Relógio">
+          <option value="3+2">3 min + 2s</option>
+          <option value="5+0" selected>5 min</option>
+          <option value="10+0">10 min</option>
+          <option value="15+10">15 min + 10s</option>
+          <option value="1+0">1 min</option>
+        </select>
+        <select id="tn-maximo" aria-label="Máximo de jogadores">
+          <option value="4">até 4 jogadores</option>
+          <option value="8" selected>até 8 jogadores</option>
+          <option value="16">até 16 jogadores</option>
+          <option value="32">até 32 jogadores</option>
+        </select>
+        <button type="submit" class="destaque">➕ Criar torneio</button>
+      </form>
+      <div class="torneios-corpo">
+        <div id="torneios-lista" class="torneios-lista"></div>
+        <div id="torneio-detalhe" class="torneio-detalhe"></div>
       </div>
     </div>
   </div>

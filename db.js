@@ -126,6 +126,49 @@ const ESQUEMA = [
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (usuario_id, codigo)
   )`,
+  // Avatar escolhido pelo jogador (um emoji da lista)
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS avatar TEXT`,
+  // Mensagens privadas entre amigos
+  `CREATE TABLE IF NOT EXISTS mensagens (
+    id SERIAL PRIMARY KEY,
+    de INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    para INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    texto TEXT NOT NULL,
+    lida BOOLEAN NOT NULL DEFAULT false,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS mensagens_conversa_idx ON mensagens (least(de, para), greatest(de, para), criado_em)`,
+  // Torneios eliminatórios
+  `CREATE TABLE IF NOT EXISTS torneios (
+    id SERIAL PRIMARY KEY,
+    nome TEXT NOT NULL,
+    minutos INT NOT NULL DEFAULT 5,
+    incremento INT NOT NULL DEFAULT 0,
+    maximo INT NOT NULL DEFAULT 8,
+    estado TEXT NOT NULL DEFAULT 'inscricoes',
+    vencedor_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
+    vencedor_nome TEXT,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS torneio_jogadores (
+    torneio_id INT NOT NULL REFERENCES torneios(id) ON DELETE CASCADE,
+    usuario_id INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    nome TEXT NOT NULL,
+    PRIMARY KEY (torneio_id, usuario_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS torneio_partidas (
+    id SERIAL PRIMARY KEY,
+    torneio_id INT NOT NULL REFERENCES torneios(id) ON DELETE CASCADE,
+    rodada INT NOT NULL,
+    posicao INT NOT NULL,
+    branco_id INT, branco_nome TEXT,
+    preto_id INT, preto_nome TEXT,
+    vencedor_id INT, vencedor_nome TEXT,
+    motivo TEXT,
+    sala TEXT,
+    estado TEXT NOT NULL DEFAULT 'aguardando',
+    UNIQUE (torneio_id, rodada, posicao)
+  )`,
   // Pódio de cada mês (temporada), guardado quando o mês acaba
   `CREATE TABLE IF NOT EXISTS temporada_premios (
     temporada TEXT NOT NULL,

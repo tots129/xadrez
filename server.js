@@ -70,7 +70,7 @@ app.get('/:arquivo', (req, res, next) => {
 });
 
 // Partida terminada: guarda no histórico e atualiza o ranking das contas
-function registrarNoRanking(sala, vencedor, motivo) {
+function registrarNoRanking(sala, codigo, vencedor, motivo) {
   const { w, b } = sala.jogadores;
   if (!w || !b) return;
   registrarPartida({
@@ -79,7 +79,20 @@ function registrarNoRanking(sala, vencedor, motivo) {
     vencedor,
     motivo,
     lances: sala.chess.history().length,
-  }).catch((e) => console.error('Erro ao salvar partida:', e.message));
+  })
+    .then((mudanca) => {
+      if (!mudanca) return;
+      // Atualiza o ELO guardado na sala e na conexão de cada um, e avisa os dois
+      for (const cor of ['w', 'b']) {
+        const j = sala.jogadores[cor];
+        if (!j) continue;
+        j.elo = mudanca[cor].elo;
+        const s = j.socket && io.sockets.sockets.get(j.socket);
+        if (s?.data.usuario) s.data.usuario.elo = mudanca[cor].elo;
+      }
+      io.to(codigo).emit('elo', mudanca);
+    })
+    .catch((e) => console.error('Erro ao salvar partida:', e.message));
 }
 
 /* ============================================================
@@ -115,7 +128,7 @@ function infoJogadores(sala) {
   const info = {};
   for (const cor of ['w', 'b']) {
     const j = sala.jogadores[cor];
-    info[cor] = j ? { nome: j.nome, conectado: j.conectado, conta: !!j.usuarioId, usuarioId: j.usuarioId } : null;
+    info[cor] = j ? { nome: j.nome, conectado: j.conectado, conta: !!j.usuarioId, usuarioId: j.usuarioId, elo: j.elo ?? null } : null;
   }
   return info;
 }
@@ -162,7 +175,7 @@ function finalizar(sala, codigo, resultado) {
   sala.ofertaDe = null;
   sala.revanche = new Set();
   clearTimeout(sala.timerTempo);
-  registrarNoRanking(sala, resultado.vencedor, resultado.motivo);
+  registrarNoRanking(sala, codigo, resultado.vencedor, resultado.motivo);
   io.to(codigo).emit('fim', { ...resultado, relogio: relogioAgora(sala), jogadores: infoJogadores(sala) });
 }
 
@@ -249,6 +262,7 @@ io.on('connection', (socket) => {
   const novoJogador = (id, sessao, nome) => ({
     id: String(id || socket.id).slice(0, 64),
     usuarioId: usuario?.id || null,
+    elo: usuario ? usuario.elo : null,
     sessao: String(sessao || socket.id).slice(0, 64),
     nome: usuario ? usuario.nome : limparNome(nome),
     socket: socket.id,

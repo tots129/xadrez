@@ -135,6 +135,7 @@
     <!-- JOGO -->
     <section id="jogo" hidden>
       <div id="status"></div>
+      <div id="elo-mudanca" hidden></div>
       <div id="info"></div>
 
       <div id="convite" class="convite" hidden>
@@ -202,12 +203,13 @@
 
   <div id="ranking" class="overlay" hidden>
     <div class="caixa ranking-caixa">
-      <p>🏆 Ranking online</p>
+      <p>🏆 Ranking de ELO</p>
       <table>
-        <thead><tr><th></th><th>Jogador</th><th>Pontos</th><th>Partidas</th></tr></thead>
+        <thead><tr><th></th><th>Jogador</th><th>ELO</th><th>Partidas</th></tr></thead>
         <tbody id="ranking-lista"></tbody>
       </table>
-      <small class="nota">Só contam partidas online entre duas contas, com pelo menos 2 lances de cada lado.</small>
+      <small class="nota">Todo mundo começa com 1200 de ELO. Ganhar de alguém mais forte dá mais ELO; perder para alguém mais fraco tira mais. Só contam partidas online entre duas contas, com pelo menos 2 lances de cada lado.</small>
+      <div class="ligas" id="ligas"></div>
       <div class="dialogo-botoes"><button id="ranking-fechar">Fechar</button></div>
     </div>
   </div>
@@ -250,7 +252,7 @@
         <button type="submit" class="destaque">Salvar</button>
       </form>
       <div class="stats">
-        <div><b id="st-elo"></b><small>pontos online</small></div>
+        <div><b id="st-elo"></b><small id="st-elo-liga">ELO</small></div>
         <div><b id="st-online"></b><small>online (V/E/D)</small></div>
         <div><b id="st-bot"></b><small>contra o bot (V/E/D)</small></div>
         <div><b id="st-problemas"></b><small>problemas</small></div>

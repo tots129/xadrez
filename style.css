@@ -447,6 +447,23 @@ button.conta-btn { padding: 6px 12px; font-size: 14px; font-weight: 600; max-wid
   .stats { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* ---------- ELO ---------- */
+#elo-mudanca {
+  display: inline-block;
+  margin: 0 auto 6px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+  background: var(--card);
+  border: 1px solid var(--borda);
+  animation: surgir 0.4s ease-out;
+}
+#elo-mudanca.ganhou { color: #9be59a; border-color: var(--verde); }
+#elo-mudanca.perdeu { color: #ff9a9a; border-color: #8a3a3a; }
+@keyframes surgir { from { transform: scale(0.6); opacity: 0; } }
+.ligas { margin: 4px 0 10px; color: var(--suave); font-size: 13px; line-height: 1.8; }
+.stats small#st-elo-liga { text-align: center; }
+
 /* ---------- Painel do admin ---------- */
 .admin-caixa { width: min(96vw, 1100px); height: min(90vh, 800px); display: flex; flex-direction: column; text-align: left; padding: 16px; }
 .admin-topo { display: flex; align-items: center; gap: 8px; }

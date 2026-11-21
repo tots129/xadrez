@@ -405,6 +405,7 @@ function prepararTelaDeJogo() {
   $('btn-girar').hidden = modo === 'problema';
   atualizarBotaoAuto();
   $('info').textContent = '';
+  $('elo-mudanca').hidden = true;
   $('convite').hidden = true;
   $('chat').hidden = modo !== 'online';
   mostrar('jogo');
@@ -599,6 +600,19 @@ function coordenada(texto, tipo) {
   return s;
 }
 
+/* ---------- Ligas de ELO ---------- */
+const LIGAS = [
+  { min: 0, nome: 'Iniciante', icone: '🪵' },
+  { min: 900, nome: 'Bronze', icone: '🥉' },
+  { min: 1100, nome: 'Prata', icone: '🥈' },
+  { min: 1300, nome: 'Ouro', icone: '🥇' },
+  { min: 1500, nome: 'Platina', icone: '💠' },
+  { min: 1700, nome: 'Diamante', icone: '💎' },
+  { min: 1900, nome: 'Mestre', icone: '👑' },
+];
+const liga = (elo) => [...LIGAS].reverse().find((l) => elo >= l.min) || LIGAS[0];
+const eloTexto = (elo) => `${liga(elo).icone} ${elo}`;
+
 const oposta = (cor) => (cor === 'w' ? 'b' : 'w');
 const nomeDaCor = (cor) => (cor === 'w' ? 'Brancas' : 'Pretas');
 
@@ -609,7 +623,8 @@ function nomeDoJogador(cor) {
     const vazio = jogo.history().length || fimExtra ? 'Saiu da sala' : 'Aguardando...';
     const j = nomesOnline[cor];
     const n = (j?.nome || (cor === minhaCor ? eu : vazio)) + (j && !j.conta ? ' (convidado)' : '');
-    return cor === minhaCor ? `${n} (você)` : n;
+    const elo = j?.elo ? ` · ${eloTexto(j.elo)}` : '';
+    return (cor === minhaCor ? `${n} (você)` : n) + elo;
   }
   if (modo === 'problema') return cor === minhaCor ? eu : 'Defesa';
   return nomeDaCor(cor);
@@ -899,7 +914,8 @@ function atualizarStatus() {
     fim = true;
   } else if (jogo.isCheckmate()) {
     const vencedor = oposta(jogo.turn());
-    if (modo === 'bot' || modo === 'online') texto = vencedor === minhaCor ? 'Xeque-mate! Você venceu! 🏆' : `Xeque-mate! ${nomeDoJogador(vencedor)} venceu.`;
+    const nomeVencedor = modo === 'online' ? nomesOnline[vencedor]?.nome || 'O oponente' : nomeDoJogador(vencedor);
+    if (modo === 'bot' || modo === 'online') texto = vencedor === minhaCor ? 'Xeque-mate! Você venceu! 🏆' : `Xeque-mate! ${nomeVencedor} venceu.`;
     else texto = `Xeque-mate! ${nomeDaCor(vencedor)} venceram. 🏆`;
     fim = true;
   } else if (jogo.isStalemate()) { texto = 'Empate por afogamento.'; fim = true; }
@@ -1228,6 +1244,7 @@ function conectar() {
     } else if (novaPartida) {
       // revanche: limpa o estado da partida mas mantém o chat
       fimExtra = null;
+      $('elo-mudanca').hidden = true;
       empateEnviado = false;
       revancheEnviada = false;
       ultima = null;
@@ -1338,6 +1355,32 @@ function conectar() {
     if (cor !== minhaCor) SONS.msg();
   });
 
+  // Fim de partida valendo ELO: mostra quanto ganhou/perdeu
+  socket.on('elo', (mudanca) => {
+    for (const cor of ['w', 'b']) {
+      if (nomesOnline[cor] && mudanca[cor]) nomesOnline[cor].elo = mudanca[cor].elo;
+    }
+    const meu = mudanca[minhaCor];
+    if (meu) {
+      const antes = meu.elo - meu.delta;
+      const el = $('elo-mudanca');
+      const sinal = meu.delta > 0 ? '+' : meu.delta < 0 ? '−' : '±';
+      el.textContent = `${sinal}${Math.abs(meu.delta)} ELO  →  ${eloTexto(meu.elo)} (${liga(meu.elo).nome})`;
+      el.className = meu.delta > 0 ? 'ganhou' : meu.delta < 0 ? 'perdeu' : '';
+      el.hidden = false;
+      if (liga(meu.elo).min > liga(antes).min) {
+        setTimeout(() => avisar(`Você subiu para a liga ${liga(meu.elo).icone} ${liga(meu.elo).nome}! 🎉`), 600);
+      } else if (liga(meu.elo).min < liga(antes).min) {
+        setTimeout(() => avisar(`Você caiu para a liga ${liga(meu.elo).icone} ${liga(meu.elo).nome}.`), 600);
+      }
+      if (conta) {
+        conta.elo = meu.elo;
+        aplicarConta(conta);
+      }
+    }
+    atualizarJogadores();
+  });
+
   socket.on('amigos-mudou', ({ texto } = {}) => {
     if (texto) {
       avisar(texto);
@@ -1402,6 +1445,7 @@ $('chat-form').onsubmit = (e) => {
 ============================================================ */
 $('btn-ranking').onclick = async () => {
   $('ranking').hidden = false;
+  $('ligas').textContent = LIGAS.map((l) => `${l.icone} ${l.nome} ${l.min ? l.min + '+' : ''}`.trim()).join('  ·  ');
   const corpo = $('ranking-lista');
   corpo.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
   try {
@@ -1414,7 +1458,7 @@ $('btn-ranking').onclick = async () => {
     lista.forEach((j, i) => {
       const tr = document.createElement('tr');
       const medalha = ['🥇', '🥈', '🥉'][i] || `${i + 1}º`;
-      for (const valor of [medalha, j.nome, j.elo, `${j.v}V ${j.e}E ${j.d}D`]) {
+      for (const valor of [medalha, j.nome, eloTexto(j.elo), `${j.v}V ${j.e}E ${j.d}D`]) {
         const td = document.createElement('td');
         td.textContent = valor;
         tr.appendChild(td);
@@ -1454,7 +1498,7 @@ function renovarConexao() {
 
 async function aplicarConta(usuario) {
   conta = usuario;
-  $('btn-conta').textContent = conta ? `👤 ${conta.nome}` : '👤 Entrar';
+  $('btn-conta').textContent = conta ? `👤 ${conta.nome} · ${eloTexto(conta.elo)}` : '👤 Entrar';
   $('btn-admin').hidden = !conta?.admin;
   $('apelido').disabled = !!conta;
   $('apelido').parentElement.title = conta ? 'Seu nome é o da sua conta' : '';
@@ -1549,7 +1593,9 @@ async function abrirPerfil() {
   $('perfil-nome').textContent = conta.nome;
   $('perfil-email').textContent = conta.email || '';
   $('email-form').hidden = !!conta.email;
-  $('st-elo').textContent = conta.elo;
+  $('st-elo').textContent = eloTexto(conta.elo);
+  const proxima = LIGAS.find((l) => l.min > conta.elo);
+  $('st-elo-liga').textContent = `ELO · ${liga(conta.elo).nome}` + (proxima ? ` (faltam ${proxima.min - conta.elo} p/ ${proxima.nome})` : '');
   $('st-online').textContent = `${conta.vitorias}/${conta.empates}/${conta.derrotas}`;
   $('st-bot').textContent = `${conta.bot_vitorias}/${conta.bot_empates}/${conta.bot_derrotas}`;
   $('st-problemas').textContent = `${resolvidos.size}/${PROBLEMAS.length}`;
@@ -1663,7 +1709,7 @@ async function carregarAmigos() {
         const ok = await perguntarPorCima(`Desfazer a amizade com ${a.nome}?`);
         if (ok) acaoAmigo('/amigos/remover', a.id);
       }]);
-      const linha = linhaAmigo(`${a.nome} · ${a.elo} pts · ${estado}`, botoes);
+      const linha = linhaAmigo(`${a.nome} · ${eloTexto(a.elo)} ELO · ${estado}`, botoes);
       linha.lastChild.title = 'Desfazer amizade';
       lista.appendChild(linha);
     }
@@ -1817,7 +1863,7 @@ async function carregarAdmin() {
       el.appendChild(busca);
       const lista = await api('/admin/usuarios?busca=' + encodeURIComponent(carregarAdmin.busca || ''));
       el.appendChild(tabela(
-        ['Apelido', 'E-mail', 'Status', 'Pontos', 'Online V/E/D', 'Bot V/E/D', 'Probl.', 'Amigos', 'Criada', 'Último login', 'Ações'],
+        ['Apelido', 'E-mail', 'Status', 'ELO', 'Online V/E/D', 'Bot V/E/D', 'Probl.', 'Amigos', 'Criada', 'Último login', 'Ações'],
         lista.map((u) => {
           const acoes = document.createElement('div');
           acoes.className = 'acoes';
@@ -1838,7 +1884,7 @@ async function carregarAdmin() {
             acoes.textContent = '👑 admin';
           }
           const status = u.bloqueado ? '⛔ bloqueada' : u.jogando ? '🟡 jogando' : u.online ? '🟢 online' : '⚪ offline';
-          return [u.nome, u.email, status, u.elo, `${u.vitorias}/${u.empates}/${u.derrotas}`,
+          return [u.nome, u.email, status, eloTexto(u.elo), `${u.vitorias}/${u.empates}/${u.derrotas}`,
             `${u.bot_vitorias}/${u.bot_empates}/${u.bot_derrotas}`, u.problemas, u.amigos, dataHora(u.criado_em), dataHora(u.ultimo_login), acoes];
         })
       ));

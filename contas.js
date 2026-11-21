@@ -66,7 +66,7 @@ export function lerCookie(cabecalho, nome = COOKIE) {
 export async function usuarioDaSessao(token) {
   if (!token || !bancoAtivo()) return null;
   const rows = await q(
-    `SELECT u.id, u.nome, u.email FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
+    `SELECT u.id, u.nome, u.email, round(u.elo)::int AS elo FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
      WHERE s.token = $1 AND s.expira_em > now() AND NOT u.bloqueado`,
     [token]
   );
@@ -115,8 +115,8 @@ async function perfil(id) {
 
 /* ---------- Ranking e partidas online (chamado pelo servidor do jogo) ---------- */
 export async function registrarPartida({ branco, preto, vencedor, motivo, lances }) {
-  if (!bancoAtivo()) return;
-  if (!branco.usuarioId && !preto.usuarioId) return; // dois convidados: nada a guardar
+  if (!bancoAtivo()) return null;
+  if (!branco.usuarioId && !preto.usuarioId) return null; // dois convidados: nada a guardar
   await q(
     `INSERT INTO partidas (branco, preto, branco_nome, preto_nome, vencedor, motivo, lances)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -124,12 +124,12 @@ export async function registrarPartida({ branco, preto, vencedor, motivo, lances
   );
 
   // Pontos só contam entre duas contas diferentes e com pelo menos 2 lances de cada lado
-  if (!branco.usuarioId || !preto.usuarioId || branco.usuarioId === preto.usuarioId || lances < 4) return;
+  if (!branco.usuarioId || !preto.usuarioId || branco.usuarioId === preto.usuarioId || lances < 4) return null;
   const linhas = await q('SELECT id, elo FROM usuarios WHERE id = ANY($1)', [[branco.usuarioId, preto.usuarioId]]);
   const elo = Object.fromEntries(linhas.map((l) => [l.id, Number(l.elo)]));
   const eb = elo[branco.usuarioId];
   const ep = elo[preto.usuarioId];
-  if (eb === undefined || ep === undefined) return;
+  if (eb === undefined || ep === undefined) return null;
   const esperadoB = 1 / (1 + 10 ** ((ep - eb) / 400));
   const placarB = vencedor === 'w' ? 1 : vencedor === 'b' ? 0 : 0.5;
   const K = 32;
@@ -137,6 +137,13 @@ export async function registrarPartida({ branco, preto, vencedor, motivo, lances
   const col = (placar) => (placar === 1 ? 'vitorias' : placar === 0 ? 'derrotas' : 'empates');
   await q(`UPDATE usuarios SET elo = elo + $2, ${col(placarB)} = ${col(placarB)} + 1 WHERE id = $1`, [branco.usuarioId, deltaB]);
   await q(`UPDATE usuarios SET elo = elo - $2, ${col(1 - placarB)} = ${col(1 - placarB)} + 1 WHERE id = $1`, [preto.usuarioId, deltaB]);
+  // Devolve o ELO novo e quanto cada um ganhou/perdeu (arredondado, como aparece na tela)
+  const nb = Math.round(eb + deltaB);
+  const np = Math.round(ep - deltaB);
+  return {
+    w: { elo: nb, delta: nb - Math.round(eb) },
+    b: { elo: np, delta: np - Math.round(ep) },
+  };
 }
 
 export async function saoAmigos(a, b) {

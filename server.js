@@ -106,6 +106,40 @@ function registrarNoRanking(sala, codigo, vencedor, motivo) {
 const salas = new Map();
 let contadorMensagens = 0;
 
+// Fila da partida rápida: [{ socketId, jogador, min, inc, desde }]
+const fila = [];
+function tirarDaFila(socketId) {
+  const i = fila.findIndex((f) => f.socketId === socketId);
+  if (i >= 0) fila.splice(i, 1);
+}
+
+function relogioValido(minutos, incremento) {
+  const min = [0, 1, 3, 5, 10, 15].includes(Number(minutos)) ? Number(minutos) : 0;
+  const inc = min && [0, 2, 5, 10].includes(Number(incremento)) ? Number(incremento) : 0;
+  return { min, inc };
+}
+
+function criarSala(minutos, incremento) {
+  const { min, inc } = relogioValido(minutos, incremento);
+  const codigo = gerarCodigo();
+  const sala = {
+    chess: new Chess(),
+    jogadores: { w: null, b: null },
+    iniciada: false,
+    encerrada: false,
+    resultado: null,
+    ofertaDe: null,
+    revanche: new Set(),
+    base: min * 60_000,
+    incremento: inc * 1000,
+    tempo: { w: min * 60_000, b: min * 60_000 },
+    turnoInicio: 0,
+    timerTempo: null,
+  };
+  salas.set(codigo, sala);
+  return { codigo, sala };
+}
+
 function gerarCodigo() {
   let codigo;
   do {
@@ -285,34 +319,58 @@ io.on('connection', (socket) => {
 
   socket.on('criar-sala', ({ nome, id, sessao, minutos, incremento } = {}) => {
     if (socket.data.sala) jogadorSaiu(socket, true);
-    const codigo = gerarCodigo();
+    tirarDaFila(socket.id);
+    const { codigo, sala } = criarSala(minutos, incremento);
     const cor = Math.random() < 0.5 ? 'w' : 'b';
-    const min = [0, 1, 3, 5, 10, 15].includes(Number(minutos)) ? Number(minutos) : 0;
-    const inc = [0, 2, 5, 10].includes(Number(incremento)) ? Number(incremento) : 0;
-    const sala = {
-      chess: new Chess(),
-      jogadores: { w: null, b: null },
-      iniciada: false,
-      encerrada: false,
-      resultado: null,
-      ofertaDe: null,
-      revanche: new Set(),
-      base: min * 60_000,
-      incremento: min ? inc * 1000 : 0,
-      tempo: { w: min * 60_000, b: min * 60_000 },
-      turnoInicio: 0,
-      timerTempo: null,
-    };
     sala.jogadores[cor] = novoJogador(id, sessao, nome);
-    salas.set(codigo, sala);
     socket.join(codigo);
     socket.data.sala = codigo;
     socket.data.cor = cor;
     enviarSala(sala, codigo, cor);
   });
 
+  // ⚡ Partida rápida: entra na fila e é juntado com alguém do mesmo relógio (de preferência ELO parecido)
+  socket.on('fila-entrar', ({ nome, id, sessao, minutos, incremento } = {}) => {
+    if (socket.data.sala) jogadorSaiu(socket, true);
+    tirarDaFila(socket.id);
+    const { min, inc } = relogioValido(minutos, incremento);
+    const eu = novoJogador(id, sessao, nome);
+    const candidatos = fila.filter((f) =>
+      f.min === min && f.inc === inc &&
+      f.jogador.sessao !== eu.sessao &&
+      !(eu.usuarioId && f.jogador.usuarioId === eu.usuarioId) &&
+      io.sockets.sockets.get(f.socketId));
+    if (!candidatos.length) {
+      fila.push({ socketId: socket.id, jogador: eu, min, inc, desde: Date.now() });
+      return socket.emit('fila-aguardando');
+    }
+    // Escolhe o ELO mais próximo; sem ELO (convidado), quem está esperando há mais tempo
+    const distancia = (f) => (eu.elo != null && f.jogador.elo != null ? Math.abs(eu.elo - f.jogador.elo) : 5000);
+    candidatos.sort((a, b) => distancia(a) - distancia(b) || a.desde - b.desde);
+    const outro = candidatos[0];
+    tirarDaFila(outro.socketId);
+    const outroSocket = io.sockets.sockets.get(outro.socketId);
+    if (outroSocket.data.sala) jogadorSaiu(outroSocket, true);
+
+    const { codigo, sala } = criarSala(min, inc);
+    const minhaCor = Math.random() < 0.5 ? 'w' : 'b';
+    sala.jogadores[minhaCor] = eu;
+    sala.jogadores[outra(minhaCor)] = { ...outro.jogador, socket: outroSocket.id, conectado: true };
+    for (const [s, cor] of [[socket, minhaCor], [outroSocket, outra(minhaCor)]]) {
+      s.join(codigo);
+      s.data.sala = codigo;
+      s.data.cor = cor;
+    }
+    comecarPartida(sala, codigo);
+    enviarSala(sala, codigo, 'w');
+    enviarSala(sala, codigo, 'b');
+  });
+
+  socket.on('fila-sair', () => tirarDaFila(socket.id));
+
   // Serve tanto para entrar pela primeira vez quanto para reconectar
   socket.on('entrar-sala', ({ codigo: codigoBruto, nome, id, sessao } = {}) => {
+    tirarDaFila(socket.id);
     const codigo = String(codigoBruto || '').trim().toUpperCase();
     const sala = salas.get(codigo);
     if (!sala) return socket.emit('erro-sala', 'Sala não encontrada. Ela pode ter sido encerrada.');
@@ -500,8 +558,12 @@ io.on('connection', (socket) => {
     ok('Denúncia enviada. Obrigado! O administrador vai analisar. 🚩');
   });
 
-  socket.on('sair-sala', () => jogadorSaiu(socket, true));
+  socket.on('sair-sala', () => {
+    tirarDaFila(socket.id);
+    jogadorSaiu(socket, true);
+  });
   socket.on('disconnect', () => {
+    tirarDaFila(socket.id);
     jogadorSaiu(socket, false);
     if (usuario) {
       const abas = abasDoUsuario.get(usuario.id);

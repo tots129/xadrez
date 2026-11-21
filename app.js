@@ -85,7 +85,7 @@ const PROBLEMAS = [
 const INICIAL = { p: 8, n: 2, b: 2, r: 2, q: 1 };
 const PONTOS = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 const COLUNAS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-const NOMES_NIVEL = { 1: 'fácil', 2: 'médio', 3: 'difícil' };
+const NOMES_NIVEL = { 1: 'nível 1', 2: 'nível 2', 3: 'nível 3', 4: 'nível 4', 5: 'nível 5', 6: 'nível 6', 7: 'nível 7', 8: 'nível 8', 9: 'nível 9', 10: 'nível 10' };
 const NOMES_PECA = { q: 'Dama', r: 'Torre', b: 'Bispo', n: 'Cavalo' };
 const $ = (id) => document.getElementById(id);
 
@@ -303,6 +303,35 @@ $('btn-iniciar-problema').onclick = () => {
   const proximo = PROBLEMAS.findIndex((_, i) => !resolvidos.has(i));
   iniciarProblema(proximo === -1 ? 0 : proximo);
 };
+/* ---------- ⚡ Partida rápida ---------- */
+let naFila = null;     // o que mandamos ao servidor (para reenviar se a conexão cair)
+let filaTimer = null;
+$('btn-rapida').onclick = () => {
+  const [minutos, incremento] = $('relogio-online').value.split('+').map(Number);
+  salaAtual = null;
+  naFila = { nome: meuNome(), id: meuId, sessao: minhaSessao, minutos, incremento };
+  const s = conectar();
+  if (s.connected) s.emit('fila-entrar', naFila);
+  $('fila').hidden = false;
+  const inicio = Date.now();
+  const relogioTexto = minutos ? `⏱ ${minutos} min${incremento ? ` + ${incremento}s` : ''}` : 'sem relógio';
+  const atualizar = () => {
+    const s2 = Math.floor((Date.now() - inicio) / 1000);
+    $('fila-info').textContent = `${relogioTexto} · esperando há ${s2}s` +
+      (s2 > 30 ? ' · Dica: chame um amigo pelo link de convite!' : '');
+  };
+  atualizar();
+  clearInterval(filaTimer);
+  filaTimer = setInterval(atualizar, 1000);
+};
+function sairDaFila(avisarServidor = true) {
+  if (naFila && avisarServidor && socket) socket.emit('fila-sair');
+  naFila = null;
+  clearInterval(filaTimer);
+  $('fila').hidden = true;
+}
+$('fila-cancelar').onclick = () => sairDaFila(true);
+
 $('btn-criar').onclick = () => {
   const [minutos, incremento] = $('relogio-online').value.split('+').map(Number);
   salaAtual = null;
@@ -380,6 +409,8 @@ function voltarAoMenu() {
   }
   salaAtual = null;
   amigoParaConvidar = null;
+  premove = null;
+  sairDaFila(false);
   try { sessionStorage.removeItem('xadrez-sala'); } catch { /* ok */ }
   history.replaceState(null, '', location.pathname);
   partidaId++;
@@ -505,6 +536,7 @@ function renderizar(animacoes = []) {
       if (casa === selecionada) div.classList.add('selecionada');
       if (ultima && (casa === ultima.from || casa === ultima.to)) div.classList.add('ultima');
       if (dica && (casa === dica.from || casa === dica.to)) div.classList.add('dica');
+      if (premove && (casa === premove.from || casa === premove.to)) div.classList.add('premove');
       if (peca && peca.type === 'k' && peca.color === emXeque) div.classList.add('xeque');
 
       const destino = destinos.find((m) => m.to === casa);
@@ -523,7 +555,6 @@ function renderizar(animacoes = []) {
       if (c === colunas[0]) div.appendChild(coordenada(String(r), 'rank'));
       if (r === linhas[7]) div.appendChild(coordenada(COLUNAS[c], 'file'));
 
-      div.onclick = () => aoClicar(casa);
       tab.appendChild(div);
     }
   }
@@ -795,8 +826,59 @@ function minhaVez() {
 /* ============================================================
    JOGADAS
 ============================================================ */
+/* ---------- Pré-lance: marcar a próxima jogada enquanto o oponente pensa ---------- */
+let premove = null; // { from, to }
+const podePremove = () => (modo === 'online' || modo === 'bot') && ativo && !jogo.isGameOver() && jogo.turn() !== minhaCor;
+
+// Lances da minha peça como se fosse a minha vez (para escolher o pré-lance)
+function lancesSeFosseMinhaVez(casa) {
+  const partes = jogo.fen().split(' ');
+  partes[1] = minhaCor;
+  partes[3] = '-';
+  try {
+    return new Chess(partes.join(' ')).moves({ square: casa, verbose: true });
+  } catch {
+    return [];
+  }
+}
+
+function cliqueDePremove(casa) {
+  if (selecionada && destinos.some((m) => m.to === casa)) {
+    premove = { from: selecionada, to: casa };
+    selecionada = null;
+    destinos = [];
+  } else if (jogo.get(casa)?.color === minhaCor && casa !== selecionada) {
+    premove = null;
+    selecionada = casa;
+    destinos = lancesSeFosseMinhaVez(casa);
+  } else {
+    premove = null;
+    selecionada = null;
+    destinos = [];
+  }
+  renderizar();
+}
+
+// Chegou a minha vez: se tinha pré-lance e ele é válido, joga na hora
+function tentarPremove() {
+  if (!premove) return;
+  const p = premove;
+  premove = null;
+  if (!ativo || jogo.isGameOver() || !minhaVez()) return renderizar();
+  const valido = jogo.moves({ square: p.from, verbose: true }).find((m) => m.to === p.to);
+  if (!valido) return renderizar();
+  setTimeout(() => {
+    if (ativo && minhaVez() && !jogo.isGameOver()) executar(p.from, p.to, valido.promotion ? 'q' : undefined);
+  }, ANIMACAO_MS + 30);
+}
+
 async function aoClicar(casa) {
-  if (!ativo || pensando || girando || escolhendoPromocao || jogo.isGameOver() || !minhaVez()) return;
+  if (!ativo || girando || escolhendoPromocao || jogo.isGameOver()) return;
+  if (!minhaVez() || (pensando && modo === 'bot')) {
+    if (podePremove()) cliqueDePremove(casa);
+    return;
+  }
+  if (pensando) return;
 
   if (selecionada) {
     const alvo = destinos.filter((m) => m.to === casa);
@@ -821,6 +903,69 @@ async function aoClicar(casa) {
   }
   renderizar();
 }
+
+/* ---------- Clicar ou ARRASTAR as peças (mouse e dedo) ---------- */
+let arraste = null; // { origem, fantasma, x0, y0, moveu }
+const casaNoPonto = (x, y) => document.elementFromPoint(x, y)?.closest?.('#tabuleiro .casa')?.dataset.casa || null;
+
+$('tabuleiro').addEventListener('pointerdown', async (e) => {
+  if (e.button !== 0) return;
+  const casa = e.target.closest('.casa')?.dataset.casa;
+  if (!casa) return;
+  e.preventDefault();
+  await aoClicar(casa);
+  // Começa a arrastar se a peça clicada ficou selecionada
+  if (selecionada !== casa) return;
+  const peca = $('tabuleiro').querySelector(`[data-casa="${casa}"] .peca`);
+  if (!peca) return;
+  const r = peca.getBoundingClientRect();
+  const fantasma = peca.cloneNode(true);
+  fantasma.classList.add('fantasma');
+  fantasma.style.width = r.width + 'px';
+  fantasma.style.height = r.height + 'px';
+  fantasma.style.left = e.clientX - r.width / 2 + 'px';
+  fantasma.style.top = e.clientY - r.height / 2 + 'px';
+  fantasma.hidden = true; // só aparece se o dedo/mouse andar um pouco
+  document.body.appendChild(fantasma);
+  arraste = { origem: casa, fantasma, x0: e.clientX, y0: e.clientY, moveu: false, peca };
+});
+
+window.addEventListener('pointermove', (e) => {
+  if (!arraste) return;
+  if (!arraste.moveu && Math.hypot(e.clientX - arraste.x0, e.clientY - arraste.y0) > 6) {
+    arraste.moveu = true;
+    arraste.fantasma.hidden = false;
+    arraste.peca.style.opacity = '0.3';
+  }
+  if (arraste.moveu) {
+    const f = arraste.fantasma;
+    f.style.left = e.clientX - f.offsetWidth / 2 + 'px';
+    f.style.top = e.clientY - f.offsetHeight / 2 + 'px';
+  }
+});
+
+window.addEventListener('pointerup', (e) => {
+  if (!arraste) return;
+  const { origem, fantasma, moveu, peca } = arraste;
+  arraste = null;
+  fantasma.remove();
+  peca.style.opacity = '';
+  if (!moveu) return; // foi só um clique: a peça continua selecionada
+  const destino = casaNoPonto(e.clientX, e.clientY);
+  if (destino && destino !== origem && destinos.some((m) => m.to === destino)) aoClicar(destino);
+  else renderizar();
+});
+
+// Botão direito no tabuleiro cancela o pré-lance
+$('tabuleiro').addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (premove || (selecionada && !minhaVez())) {
+    premove = null;
+    selecionada = null;
+    destinos = [];
+    renderizar();
+  }
+});
 
 function pedirPromocao(cor) {
   return new Promise((resolve) => {
@@ -965,11 +1110,14 @@ function mostrarDica() {
   if (!emAndamento() || pensando || girando || !minhaVez() || modo === 'online') return;
   $('status').textContent = 'Procurando uma boa jogada... 💡';
   $('status').className = 'pensando';
-  setTimeout(() => {
+  setTimeout(async () => {
     const copia = new Chess(jogo.fen());
     let san;
     if (modo === 'problema') san = copia.moves().find((m) => { copia.move(m); const ok = copia.isCheckmate() || (lancesRestantes > 1 && defesaPerde(copia, lancesRestantes - 1)); copia.undo(); return ok; });
-    else san = escolherJogadaDoBot(copia, 3);
+    else {
+      const r = await perguntarStockfish(jogo.fen(), { skill: 20, depth: 12, tempo: 1500 });
+      san = r ? r.lance : escolherJogadaDoBot(copia, 3);
+    }
     if (!san) return atualizarStatus();
     const m = copia.move(san);
     dica = { from: m.from, to: m.to };
@@ -1152,6 +1300,90 @@ function escolherJogadaDoBot(g, nivelBot) {
   return melhorJogada;
 }
 
+/* ---------- Stockfish (motor de xadrez de verdade, roda no navegador) ---------- */
+const STOCKFISH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
+// Nível 1 = jogadas aleatórias; 2 a 10 = Stockfish ficando cada vez mais forte
+const NIVEIS_SF = {
+  2: { skill: 0, depth: 1, tempo: 300 }, 3: { skill: 2, depth: 2, tempo: 400 }, 4: { skill: 4, depth: 3, tempo: 500 },
+  5: { skill: 6, depth: 5, tempo: 700 }, 6: { skill: 9, depth: 7, tempo: 900 }, 7: { skill: 12, depth: 9, tempo: 1200 },
+  8: { skill: 15, depth: 11, tempo: 1600 }, 9: { skill: 18, depth: 13, tempo: 2200 }, 10: { skill: 20, depth: 16, tempo: 3000 },
+};
+let sfPromessa = null;
+let sfFila = Promise.resolve();
+
+function iniciarStockfish() {
+  if (sfPromessa) return sfPromessa;
+  sfPromessa = new Promise((resolve, reject) => {
+    try {
+      const blob = new Blob([`importScripts('${STOCKFISH_URL}');`], { type: 'application/javascript' });
+      const w = new Worker(URL.createObjectURL(blob));
+      const desistir = setTimeout(() => reject(new Error('Stockfish demorou para carregar')), 20000);
+      w.onmessage = (e) => {
+        if (String(e.data).startsWith('uciok')) {
+          clearTimeout(desistir);
+          resolve(w);
+        }
+      };
+      w.onerror = (e) => {
+        clearTimeout(desistir);
+        reject(e);
+      };
+      w.postMessage('uci');
+    } catch (e) {
+      reject(e);
+    }
+  });
+  sfPromessa.catch(() => (sfPromessa = null)); // tenta de novo numa próxima vez
+  return sfPromessa;
+}
+
+// Pergunta ao Stockfish. Devolve { lance: {from,to,promotion}, aval: {cp|mate} do ponto de vista de quem joga } ou null
+function perguntarStockfish(fen, { skill = 20, depth = 12, tempo = 1500 } = {}) {
+  const tarefa = sfFila.then(async () => {
+    let w;
+    try {
+      w = await iniciarStockfish();
+    } catch {
+      return null;
+    }
+    return new Promise((resolve) => {
+      let aval = null;
+      const limite = setTimeout(() => w.postMessage('stop'), tempo + 4000);
+      w.onmessage = (e) => {
+        const linha = String(e.data);
+        const m = linha.match(/score (cp|mate) (-?\d+)/);
+        if (linha.startsWith('info') && m && !linha.includes('lowerbound') && !linha.includes('upperbound')) {
+          aval = { tipo: m[1], valor: Number(m[2]) };
+        }
+        if (linha.startsWith('bestmove')) {
+          clearTimeout(limite);
+          const uci = linha.split(' ')[1];
+          if (!uci || uci === '(none)') return resolve(null);
+          resolve({ lance: { from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }, aval });
+        }
+      };
+      w.postMessage(`setoption name Skill Level value ${skill}`);
+      w.postMessage(`position fen ${fen}`);
+      w.postMessage(`go depth ${depth} movetime ${tempo}`);
+    });
+  });
+  sfFila = tarefa.catch(() => null);
+  return tarefa;
+}
+
+// Escolhe o lance do bot (Stockfish; se não carregar, usa o bot simples daqui)
+async function lanceDoBot(fen, nivelBot) {
+  const g = new Chess(fen);
+  if (nivelBot <= 1) {
+    const lista = g.moves({ verbose: true });
+    return lista[Math.floor(Math.random() * lista.length)];
+  }
+  const r = await perguntarStockfish(fen, NIVEIS_SF[nivelBot] || NIVEIS_SF[5]);
+  if (r) return r.lance;
+  const san = escolherJogadaDoBot(g, nivelBot >= 6 ? 3 : 2);
+  return g.move(san);
+}
+
 function jogarBot() {
   const id = partidaId;
   const inicio = Date.now();
@@ -1161,19 +1393,22 @@ function jogarBot() {
   $('status').className = 'pensando';
   atualizarJogadores();
 
-  setTimeout(() => {
+  setTimeout(async () => {
     if (id !== partidaId || !ativo) return;
-    const san = escolherJogadaDoBot(new Chess(jogo.fen()), nivel);
+    const lance = await lanceDoBot(jogo.fen(), nivel);
     const resto = Math.max(0, atraso - (Date.now() - inicio));
     setTimeout(() => {
-      if (id !== partidaId || !ativo) return;
-      const r = jogo.move(san);
+      if (id !== partidaId || !ativo || !lance) return;
+      const r = jogo.move({ from: lance.from, to: lance.to, promotion: lance.promotion });
       ultima = { from: r.from, to: r.to };
       pensando = false;
+      selecionada = null;
+      destinos = [];
       trocarRelogio();
       renderizar(animacoesDoLance(r.from, r.to));
       somDoUltimoLance();
       atualizarStatus();
+      tentarPremove();
     }, resto);
   }, 60);
 }
@@ -1222,6 +1457,11 @@ function conectar() {
   socket.on('connect', () => {
     $('conexao').hidden = true; // conexão nova (o servidor nunca reconecta sozinho quem ele derrubou)
     if (salaAtual) socket.emit('entrar-sala', { codigo: salaAtual, nome: meuNome(), id: meuId, sessao: minhaSessao });
+    else if (naFila) socket.emit('fila-entrar', naFila); // caiu a conexão enquanto esperava: volta para a fila
+  });
+
+  socket.on('fila-aguardando', () => {
+    $('fila').hidden = false;
   });
 
   socket.on('disconnect', (motivo) => {
@@ -1236,6 +1476,7 @@ function conectar() {
   });
 
   socket.on('sala', (s) => {
+    sairDaFila(false);
     const novaSala = salaAtual !== s.codigo || modo !== 'online' || $('jogo').hidden;
     const novaPartida = novaSala || minhaCor !== s.cor || s.historico.length < jogo.history().length;
     modo = 'online';
@@ -1303,6 +1544,7 @@ function conectar() {
     renderizar(doOponente ? animacoesDoLance(u.from, u.to) : []);
     if (doOponente) somDoUltimoLance();
     atualizarStatus();
+    if (doOponente) tentarPremove();
   });
 
   socket.on('empate-proposto', async () => {

@@ -75,9 +75,16 @@
         </label>
         <label>Nível do bot
           <select id="nivel-bot">
-            <option value="1">Fácil</option>
-            <option value="2" selected>Médio</option>
-            <option value="3">Difícil</option>
+            <option value="1">1 · Aprendiz (aleatório)</option>
+            <option value="2">2 · Muito fácil</option>
+            <option value="3">3 · Fácil</option>
+            <option value="4" selected>4 · Iniciante</option>
+            <option value="5">5 · Médio</option>
+            <option value="6">6 · Bom</option>
+            <option value="7">7 · Forte</option>
+            <option value="8">8 · Muito forte</option>
+            <option value="9">9 · Expert</option>
+            <option value="10">10 · Máximo 🔥</option>
           </select>
         </label>
         <label>Relógio
@@ -117,7 +124,8 @@
               <option value="15+10">15 min + 10s</option>
             </select>
           </label>
-          <button id="btn-criar" class="destaque">Criar sala</button>
+          <button id="btn-rapida" class="destaque">⚡ Partida rápida</button>
+          <button id="btn-criar">Criar sala</button>
         </div>
         <span class="ou">ou</span>
         <div class="bloco">
@@ -292,6 +300,16 @@
         <button id="btn-sair-conta">Sair da conta</button>
         <button id="perfil-fechar" class="destaque">Fechar</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Procurando oponente (partida rápida) -->
+  <div id="fila" class="overlay" hidden>
+    <div class="caixa fila-caixa">
+      <div class="radar">♞</div>
+      <p>Procurando oponente...</p>
+      <small id="fila-info" class="nota"></small>
+      <div class="dialogo-botoes"><button id="fila-cancelar">Cancelar</button></div>
     </div>
   </div>
 

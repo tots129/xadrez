@@ -600,15 +600,15 @@ function coordenada(texto, tipo) {
   return s;
 }
 
-/* ---------- Ligas de ELO ---------- */
+/* ---------- Ligas de ELO (todo mundo começa com 1700, na Prata) ---------- */
 const LIGAS = [
   { min: 0, nome: 'Iniciante', icone: '🪵' },
-  { min: 900, nome: 'Bronze', icone: '🥉' },
-  { min: 1100, nome: 'Prata', icone: '🥈' },
-  { min: 1300, nome: 'Ouro', icone: '🥇' },
-  { min: 1500, nome: 'Platina', icone: '💠' },
-  { min: 1700, nome: 'Diamante', icone: '💎' },
-  { min: 1900, nome: 'Mestre', icone: '👑' },
+  { min: 1400, nome: 'Bronze', icone: '🥉' },
+  { min: 1600, nome: 'Prata', icone: '🥈' },
+  { min: 1800, nome: 'Ouro', icone: '🥇' },
+  { min: 2000, nome: 'Platina', icone: '💠' },
+  { min: 2200, nome: 'Diamante', icone: '💎' },
+  { min: 2400, nome: 'Mestre', icone: '👑' },
 ];
 const liga = (elo) => [...LIGAS].reverse().find((l) => elo >= l.min) || LIGAS[0];
 const eloTexto = (elo) => `${liga(elo).icone} ${elo}`;

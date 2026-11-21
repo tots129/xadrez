@@ -170,6 +170,7 @@
       <div class="controles">
         <button id="btn-revanche" class="destaque" hidden>🔁 Revanche</button>
         <button id="btn-proximo" class="destaque" hidden>➜ Próximo problema</button>
+        <button id="btn-rever" class="destaque" hidden>🔍 Rever e analisar</button>
         <button id="btn-novo">↻ Novo jogo</button>
         <button id="btn-dica">💡 Dica</button>
         <button id="btn-desfazer">↶ Desfazer</button>
@@ -299,6 +300,42 @@
       <div class="dialogo-botoes">
         <button id="btn-sair-conta">Sair da conta</button>
         <button id="perfil-fechar" class="destaque">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rever partida (replay + análise) -->
+  <div id="replay" class="overlay" hidden>
+    <div class="caixa replay-caixa">
+      <div class="admin-topo">
+        <p id="replay-titulo">🔍 Rever partida</p>
+        <button id="replay-fechar" class="destaque">Fechar</button>
+      </div>
+      <div class="replay-corpo">
+        <div class="replay-esq">
+          <div class="replay-tab-linha">
+            <div id="replay-barra" class="barra-aval" title="Vantagem (branco embaixo)"><div id="replay-barra-branca"></div><span id="replay-barra-num"></span></div>
+            <div id="replay-tabuleiro" class="tabuleiro-mini"></div>
+          </div>
+          <div class="replay-controles">
+            <button id="rp-inicio" title="Início">⏮</button>
+            <button id="rp-voltar" title="Voltar (←)">◀</button>
+            <button id="rp-avancar" title="Avançar (→)">▶</button>
+            <button id="rp-fim" title="Fim">⏭</button>
+            <button id="rp-girar" title="Girar">⇅</button>
+          </div>
+          <div id="replay-comentario" class="replay-comentario"></div>
+        </div>
+        <div class="replay-dir">
+          <div class="replay-acoes">
+            <button id="rp-analisar" class="destaque">🔬 Analisar com Stockfish</button>
+            <button id="rp-pgn">⬇️ Baixar PGN</button>
+          </div>
+          <div id="replay-progresso" class="nota" hidden></div>
+          <svg id="replay-grafico" class="grafico-aval" viewBox="0 0 300 80" preserveAspectRatio="none" hidden></svg>
+          <div id="replay-resumo" class="replay-resumo" hidden></div>
+          <div id="replay-lances" class="replay-lances"></div>
+        </div>
       </div>
     </div>
   </div>

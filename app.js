@@ -431,6 +431,8 @@ function prepararTelaDeJogo() {
   empateEnviado = false;
   revancheEnviada = false;
   fimExtra = null;
+  ultimoVencedor = undefined;
+  premove = null;
   partidaId++;
   $('btn-auto').hidden = modo !== 'local';
   $('btn-girar').hidden = modo === 'problema';
@@ -692,6 +694,7 @@ function atualizarBotoes() {
   $('btn-novo').hidden = online;
   $('btn-novo').textContent = modo === 'problema' ? '↻ Tentar de novo' : '↻ Novo jogo';
   $('btn-proximo').hidden = modo !== 'problema';
+  $('btn-rever').hidden = !(terminou && modo !== 'problema' && jogo.history().length > 0);
   $('btn-desfazer').hidden = online || modo === 'problema';
   $('btn-dica').hidden = online;
   $('btn-dica').disabled = terminou || pensando;
@@ -1036,6 +1039,7 @@ function terminar(texto, vencedor) {
 }
 
 function comemorar(vencedor) {
+  ultimoVencedor = vencedor;
   const euVenci = modo === 'local' ? vencedor !== null : vencedor === minhaCor;
   // Salva o resultado contra o bot na conta
   if (modo === 'bot' && conta) {
@@ -1686,6 +1690,7 @@ function conectar() {
 }
 
 function aplicarFimOnline({ vencedor, motivo }, comemorarAgora) {
+  ultimoVencedor = vencedor;
   const wasAtivo = ativo;
   ativo = false;
   relogio.rodando = false;
@@ -1761,6 +1766,296 @@ $('btn-ranking').onclick = async () => {
   }
 };
 $('ranking-fechar').onclick = () => ($('ranking').hidden = true);
+
+/* ============================================================
+   REVER PARTIDA: replay lance a lance, análise do Stockfish e PGN
+============================================================ */
+const rp = {
+  historico: [], posicoes: [], lances: [], indice: 0, orientacao: 'w',
+  brancas: 'Brancas', pretas: 'Pretas', resultado: '*', data: new Date(),
+  aval: [], analise: [], analisando: false,
+};
+
+// Desenha um tabuleiro "de enfeite" (sem cliques) num elemento
+function desenharMini(el, fen, orient, marcas = {}) {
+  const g = new Chess(fen);
+  el.innerHTML = '';
+  const linhas = orient === 'w' ? [8, 7, 6, 5, 4, 3, 2, 1] : [1, 2, 3, 4, 5, 6, 7, 8];
+  const colunas = orient === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0];
+  for (const r of linhas) {
+    for (const c of colunas) {
+      const casa = COLUNAS[c] + r;
+      const div = document.createElement('div');
+      div.className = 'casa ' + ((c + r) % 2 === 1 ? 'escura' : 'clara');
+      if (marcas.ultima && (casa === marcas.ultima.from || casa === marcas.ultima.to)) div.classList.add('ultima');
+      if (marcas.melhor && (casa === marcas.melhor.from || casa === marcas.melhor.to)) div.classList.add('dica');
+      const p = g.get(casa);
+      if (p && p.type === 'k' && g.inCheck() && p.color === g.turn()) div.classList.add('xeque');
+      if (p) {
+        const span = document.createElement('span');
+        span.className = 'peca ' + (p.color === 'w' ? 'branca' : 'preta');
+        span.innerHTML = svgPeca(p.type);
+        div.appendChild(span);
+      }
+      if (c === colunas[0]) div.appendChild(coordenada(String(r), 'rank'));
+      if (r === linhas[7]) div.appendChild(coordenada(COLUNAS[c], 'file'));
+      el.appendChild(div);
+    }
+  }
+}
+
+function abrirReplay({ historico, brancas, pretas, resultado = '*', data = new Date(), orientacao = 'w', titulo }) {
+  const g = new Chess();
+  rp.posicoes = [g.fen()];
+  rp.lances = [];
+  for (const san of historico) {
+    const m = g.move(san);
+    rp.lances.push(m);
+    rp.posicoes.push(g.fen());
+  }
+  Object.assign(rp, { historico, brancas, pretas, resultado, data, orientacao, indice: historico.length, aval: [], analise: [], analisando: false });
+  $('replay-titulo').textContent = titulo || `🔍 ${brancas} × ${pretas}`;
+  $('replay-resumo').hidden = true;
+  $('replay-grafico').setAttribute('hidden', '');
+  $('replay-progresso').hidden = true;
+  $('replay-barra').style.visibility = 'hidden';
+  $('rp-analisar').disabled = false;
+  $('rp-analisar').textContent = '🔬 Analisar com Stockfish';
+  $('replay').hidden = false;
+  desenharListaReplay();
+  irPara(rp.indice);
+}
+
+const SIMBOLOS = { grave: '??', erro: '?', imprecisao: '?!', melhor: '★' };
+const NOMES_CLASSE = { grave: 'Erro grave', erro: 'Erro', imprecisao: 'Imprecisão', melhor: 'Melhor lance' };
+
+function desenharListaReplay() {
+  const el = $('replay-lances');
+  el.innerHTML = '';
+  rp.lances.forEach((m, i) => {
+    if (i % 2 === 0) {
+      const n = document.createElement('span');
+      n.className = 'n';
+      n.textContent = `${i / 2 + 1}.`;
+      el.appendChild(n);
+    }
+    const b = document.createElement('button');
+    b.className = 'lance-rp';
+    b.dataset.i = i + 1;
+    const a = rp.analise[i];
+    b.textContent = m.san + (a?.classe ? SIMBOLOS[a.classe] : '');
+    if (a?.classe) b.classList.add(a.classe);
+    b.onclick = () => irPara(i + 1);
+    el.appendChild(b);
+  });
+}
+
+// Avaliação em "centipeões" do ponto de vista das BRANCAS (+ = brancas melhor)
+function avalTexto(cp) {
+  if (Math.abs(cp) >= 9000) return (cp > 0 ? '+' : '-') + 'M';
+  return (cp > 0 ? '+' : '') + (cp / 100).toFixed(1);
+}
+
+function irPara(i) {
+  rp.indice = Math.max(0, Math.min(rp.posicoes.length - 1, i));
+  const lance = rp.lances[rp.indice - 1];
+  const a = rp.analise[rp.indice - 1];
+  desenharMini($('replay-tabuleiro'), rp.posicoes[rp.indice], rp.orientacao, {
+    ultima: lance ? { from: lance.from, to: lance.to } : null,
+    melhor: a && a.classe && a.classe !== 'melhor' ? a.melhor : null,
+  });
+  document.querySelectorAll('.lance-rp').forEach((b) => b.classList.toggle('atual', Number(b.dataset.i) === rp.indice));
+  document.querySelector('.lance-rp.atual')?.scrollIntoView({ block: 'nearest' });
+
+  // Barra de avaliação
+  const av = rp.aval[rp.indice];
+  if (av !== undefined) {
+    $('replay-barra').style.visibility = 'visible';
+    const pct = 50 + 50 * Math.tanh(av / 600);
+    $('replay-barra-branca').style.height = pct + '%';
+    $('replay-barra').classList.toggle('girada', rp.orientacao === 'b');
+    $('replay-barra-num').textContent = avalTexto(av);
+  }
+
+  // Comentário do lance
+  const c = $('replay-comentario');
+  if (!lance) c.textContent = 'Posição inicial. Use ◀ ▶ (ou as setas do teclado) para andar pelos lances.';
+  else {
+    const quem = lance.color === 'w' ? rp.brancas : rp.pretas;
+    let t = `${Math.ceil(rp.indice / 2)}${lance.color === 'w' ? '.' : '...'} ${lance.san} — ${quem}`;
+    if (a?.classe === 'melhor') t += ' · ★ Melhor lance!';
+    else if (a?.classe) {
+      const quanto = a.perda >= 900 ? 'deixou o jogo perdido' : `perdeu ${(a.perda / 100).toFixed(1)} peões de vantagem`;
+      t += ` · ${SIMBOLOS[a.classe]} ${NOMES_CLASSE[a.classe]} (${quanto}). Melhor era ${a.melhorSan} (marcado em verde).`;
+    }
+    else if (a) t += ' · Bom lance.';
+    if (rp.indice === rp.posicoes.length - 1 && rp.resultado !== '*') t += `  Resultado: ${rp.resultado}`;
+    c.textContent = t;
+  }
+}
+
+$('rp-inicio').onclick = () => irPara(0);
+$('rp-voltar').onclick = () => irPara(rp.indice - 1);
+$('rp-avancar').onclick = () => irPara(rp.indice + 1);
+$('rp-fim').onclick = () => irPara(rp.posicoes.length - 1);
+$('rp-girar').onclick = () => {
+  rp.orientacao = rp.orientacao === 'w' ? 'b' : 'w';
+  irPara(rp.indice);
+};
+$('replay-fechar').onclick = () => {
+  rp.analisando = false;
+  $('replay').hidden = true;
+};
+document.addEventListener('keydown', (e) => {
+  if ($('replay').hidden || e.target.matches('input, textarea, select')) return;
+  if (e.key === 'ArrowLeft') irPara(rp.indice - 1);
+  else if (e.key === 'ArrowRight') irPara(rp.indice + 1);
+  else if (e.key === 'Home') irPara(0);
+  else if (e.key === 'End') irPara(rp.posicoes.length - 1);
+  else return;
+  e.preventDefault();
+});
+
+// Avalia cada posição com o Stockfish e classifica os lances
+$('rp-analisar').onclick = async () => {
+  if (rp.analisando || !rp.lances.length) return;
+  rp.analisando = true;
+  $('rp-analisar').disabled = true;
+  $('replay-progresso').hidden = false;
+  const total = rp.posicoes.length;
+  const melhores = [];
+  for (let i = 0; i < total; i++) {
+    if (!rp.analisando) return; // fechou a janela
+    $('replay-progresso').textContent = `Analisando posição ${i + 1} de ${total}... ⏳`;
+    const g = new Chess(rp.posicoes[i]);
+    if (g.isCheckmate()) { rp.aval[i] = g.turn() === 'w' ? -10000 : 10000; continue; }
+    if (g.isDraw() || g.isStalemate()) { rp.aval[i] = 0; continue; }
+    const r = await perguntarStockfish(rp.posicoes[i], { skill: 20, depth: 11, tempo: 700 });
+    if (!r) {
+      $('replay-progresso').textContent = 'Não consegui carregar o Stockfish. Verifique a internet e tente de novo.';
+      rp.analisando = false;
+      $('rp-analisar').disabled = false;
+      return;
+    }
+    let v = 0;
+    if (r.aval) v = r.aval.tipo === 'mate' ? (r.aval.valor > 0 ? 10000 - r.aval.valor : -10000 - r.aval.valor) : r.aval.valor;
+    rp.aval[i] = g.turn() === 'w' ? v : -v;
+    melhores[i] = r.lance;
+    if (i === rp.indice) irPara(rp.indice);
+  }
+
+  // Classifica: quanto o lance piorou a posição para quem jogou
+  const limitar = (x) => Math.max(-1500, Math.min(1500, x));
+  const contagem = { w: { grave: 0, erro: 0, imprecisao: 0, perda: 0, n: 0 }, b: { grave: 0, erro: 0, imprecisao: 0, perda: 0, n: 0 } };
+  rp.lances.forEach((m, i) => {
+    const sinal = m.color === 'w' ? 1 : -1;
+    const perda = Math.max(0, (limitar(rp.aval[i]) - limitar(rp.aval[i + 1])) * sinal);
+    const melhor = melhores[i];
+    const jogouOMelhor = melhor && melhor.from === m.from && melhor.to === m.to;
+    let classe = null;
+    if (perda >= 300) classe = 'grave';
+    else if (perda >= 150) classe = 'erro';
+    else if (perda >= 70) classe = 'imprecisao';
+    else if (jogouOMelhor) classe = 'melhor';
+    let melhorSan = '';
+    if (melhor && classe && classe !== 'melhor') {
+      try { melhorSan = new Chess(rp.posicoes[i]).move(melhor).san; } catch { /* ok */ }
+    }
+    rp.analise[i] = { classe, perda, melhor, melhorSan };
+    const ct = contagem[m.color];
+    ct.n++;
+    ct.perda += Math.min(perda, 1000);
+    if (classe && classe !== 'melhor') ct[classe]++;
+  });
+
+  // Precisão (0 a 100%) de cada lado, a partir da perda média
+  const precisao = (ct) => (ct.n ? Math.max(0, Math.round(100 * Math.exp(-ct.perda / ct.n / 120))) : 100);
+  const resumo = $('replay-resumo');
+  resumo.innerHTML = '';
+  for (const [cor, nome] of [['w', rp.brancas], ['b', rp.pretas]]) {
+    const ct = contagem[cor];
+    const d = document.createElement('div');
+    d.textContent = `${cor === 'w' ? '⚪' : '⚫'} ${nome}: precisão ${precisao(ct)}% · ${ct.grave} ?? · ${ct.erro} ? · ${ct.imprecisao} ?!`;
+    resumo.appendChild(d);
+  }
+  resumo.hidden = false;
+  $('replay-progresso').hidden = true;
+  desenharGraficoReplay();
+  desenharListaReplay();
+  irPara(rp.indice);
+  rp.analisando = false;
+  $('rp-analisar').textContent = '✅ Analisada';
+};
+
+function desenharGraficoReplay() {
+  const svg = $('replay-grafico');
+  const n = rp.aval.length;
+  if (n < 2) return;
+  const pts = rp.aval.map((v, i) => `${(i / (n - 1)) * 300},${40 - 38 * Math.tanh(v / 600)}`);
+  svg.innerHTML = `<rect x="0" y="0" width="300" height="80" class="g-fundo"/>` +
+    `<polygon points="0,40 ${pts.join(' ')} 300,40" class="g-area"/>` +
+    `<line x1="0" y1="40" x2="300" y2="40" class="g-meio"/>`;
+  svg.removeAttribute('hidden'); // em SVG, "svg.hidden = false" não funciona
+  svg.onclick = (e) => {
+    const r = svg.getBoundingClientRect();
+    irPara(Math.round(((e.clientX - r.left) / r.width) * (n - 1)));
+  };
+}
+
+// PGN: formato padrão de partidas de xadrez (abre no Lichess, Chess.com etc.)
+$('rp-pgn').onclick = () => {
+  const g = new Chess();
+  const d = rp.data;
+  const data = `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+  g.header('Event', 'Partida no Xadrez', 'Site', location.origin, 'Date', data, 'White', rp.brancas, 'Black', rp.pretas, 'Result', rp.resultado);
+  for (const san of rp.historico) g.move(san);
+  const texto = g.pgn() + (rp.resultado !== '*' && !g.pgn().trim().endsWith(rp.resultado) ? ' ' + rp.resultado : '') + '\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([texto], { type: 'application/x-chess-pgn' }));
+  a.download = `xadrez_${rp.brancas}_x_${rp.pretas}_${data}.pgn`.replace(/[^\w.\-]+/g, '_');
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+
+// Resultado no formato PGN da partida que acabou de terminar
+function resultadoAtualPgn() {
+  if (jogo.isCheckmate()) return jogo.turn() === 'w' ? '0-1' : '1-0';
+  if (jogo.isDraw() || jogo.isStalemate()) return '1/2-1/2';
+  if (ultimoVencedor === 'w') return '1-0';
+  if (ultimoVencedor === 'b') return '0-1';
+  if (ultimoVencedor === null && fimExtra) return '1/2-1/2';
+  return '*';
+}
+let ultimoVencedor; // guardado quando a partida termina por tempo/desistência
+
+// Botão "▶ Rever" para uma partida salva no servidor
+function botaoReplay(id, orientacao = 'w') {
+  const b = document.createElement('button');
+  b.className = 'mini-btn';
+  b.textContent = '▶ Rever';
+  b.onclick = async () => {
+    try {
+      const p = await api('/partida/' + id);
+      const resultado = p.vencedor === 'w' ? '1-0' : p.vencedor === 'b' ? '0-1' : '1/2-1/2';
+      document.querySelectorAll('.overlay:not(#replay)').forEach((o) => (o.hidden = true));
+      abrirReplay({ historico: p.historico, brancas: p.branco_nome, pretas: p.preto_nome, resultado, data: new Date(p.criado_em), orientacao });
+    } catch (err) {
+      avisar(err.message);
+    }
+  };
+  return b;
+}
+
+$('btn-rever').onclick = () => {
+  const nome = (cor) => (modo === 'online' ? nomesOnline[cor]?.nome || nomeDaCor(cor) : nomeDoJogador(cor).replace(/^🤖 /, ''));
+  abrirReplay({
+    historico: jogo.history(),
+    brancas: nome('w'),
+    pretas: nome('b'),
+    resultado: resultadoAtualPgn(),
+    orientacao: modo === 'local' ? 'w' : minhaCor,
+  });
+};
 
 /* ============================================================
    CONTAS, PROGRESSO E AMIGOS
@@ -1931,7 +2226,10 @@ async function carregarPartidas() {
       div.className = 'partida ' + p.resultado;
       const icone = { vitoria: '🏆 Vitória', derrota: '❌ Derrota', empate: '🤝 Empate' }[p.resultado];
       const data = new Date(p.quando).toLocaleDateString('pt-BR');
-      div.textContent = `${icone} contra ${p.oponente} · ${MOTIVOS[p.motivo] || p.motivo} · ${data}`;
+      const span = document.createElement('span');
+      span.textContent = `${icone} contra ${p.oponente} · ${MOTIVOS[p.motivo] || p.motivo} · ${data}`;
+      div.appendChild(span);
+      if (p.temReplay) div.appendChild(botaoReplay(p.id, p.cor));
       el.appendChild(div);
     }
   } catch {

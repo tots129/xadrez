@@ -114,13 +114,13 @@ async function perfil(id) {
 }
 
 /* ---------- Ranking e partidas online (chamado pelo servidor do jogo) ---------- */
-export async function registrarPartida({ branco, preto, vencedor, motivo, lances }) {
+export async function registrarPartida({ branco, preto, vencedor, motivo, lances, historico = [] }) {
   if (!bancoAtivo()) return null;
   if (!branco.usuarioId && !preto.usuarioId) return null; // dois convidados: nada a guardar
   await q(
-    `INSERT INTO partidas (branco, preto, branco_nome, preto_nome, vencedor, motivo, lances)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [branco.usuarioId || null, preto.usuarioId || null, branco.nome, preto.nome, vencedor, motivo, lances]
+    `INSERT INTO partidas (branco, preto, branco_nome, preto_nome, vencedor, motivo, lances, historico)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [branco.usuarioId || null, preto.usuarioId || null, branco.nome, preto.nome, vencedor, motivo, lances, historico.join(' ')]
   );
 
   // Pontos só contam entre duas contas diferentes e com pelo menos 2 lances de cada lado
@@ -348,7 +348,7 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
 
   r.get('/partidas', precisaLogin, async (req, res) => {
     const rows = await q(
-      `SELECT branco, preto, branco_nome, preto_nome, vencedor, motivo, lances, criado_em
+      `SELECT id, branco, preto, branco_nome, preto_nome, vencedor, motivo, lances, criado_em, historico IS NOT NULL AS tem_replay
        FROM partidas WHERE branco = $1 OR preto = $1 ORDER BY criado_em DESC LIMIT 10`,
       [req.usuario.id]
     );
@@ -356,6 +356,8 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     res.json(rows.map((p) => {
       const minhaCor = p.branco === eu ? 'w' : 'b';
       return {
+        id: p.id,
+        temReplay: p.tem_replay,
         oponente: minhaCor === 'w' ? p.preto_nome : p.branco_nome,
         cor: minhaCor,
         resultado: p.vencedor === null ? 'empate' : p.vencedor === minhaCor ? 'vitoria' : 'derrota',
@@ -364,6 +366,16 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
         quando: p.criado_em,
       };
     }));
+  });
+
+  // Uma partida completa (para o replay)
+  r.get('/partida/:id', async (req, res) => {
+    const [p] = await q(
+      `SELECT id, branco_nome, preto_nome, vencedor, motivo, historico, criado_em FROM partidas WHERE id = $1`,
+      [Number(req.params.id) || 0]
+    );
+    if (!p || p.historico === null) return res.status(404).json({ erro: 'Partida não encontrada.' });
+    res.json({ ...p, historico: p.historico ? p.historico.split(' ') : [] });
   });
 
   r.get('/ranking', async (req, res) => {

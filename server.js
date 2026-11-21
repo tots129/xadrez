@@ -79,6 +79,7 @@ function registrarNoRanking(sala, codigo, vencedor, motivo) {
     vencedor,
     motivo,
     lances: sala.chess.history().length,
+    historico: sala.chess.history(),
   })
     .then((mudanca) => {
       if (!mudanca) return;

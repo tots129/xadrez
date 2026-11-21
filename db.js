@@ -103,6 +103,8 @@ const ESQUEMA = [
     lances INT NOT NULL,
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+  // Lances da partida (para o replay), separados por espaço: "e4 e5 Nf3 ..."
+  `ALTER TABLE partidas ADD COLUMN IF NOT EXISTS historico TEXT`,
 ];
 
 // Mudanças que devem rodar UMA vez só (ficam anotadas na tabela "migracoes")

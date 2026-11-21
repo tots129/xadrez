@@ -54,9 +54,8 @@ const ESQUEMA = [
   `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_login TIMESTAMPTZ`,
   `CREATE UNIQUE INDEX IF NOT EXISTS usuarios_email_idx ON usuarios (lower(email))`,
-  // Todo mundo começa com 1700 de ELO (contas que ainda não jogaram online também sobem para 1700)
-  `ALTER TABLE usuarios ALTER COLUMN elo SET DEFAULT 1700`,
-  `UPDATE usuarios SET elo = 1700 WHERE elo = 1200 AND vitorias + derrotas + empates = 0`,
+  // Todo mundo começa com 0 de ELO
+  `ALTER TABLE usuarios ALTER COLUMN elo SET DEFAULT 0`,
   `CREATE TABLE IF NOT EXISTS denuncias (
     id SERIAL PRIMARY KEY,
     denunciante_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
@@ -110,6 +109,8 @@ const ESQUEMA = [
 const MIGRACOES = [
   // Pedido do dono: todas as contas existentes voltam para 1700 de ELO (vitórias/derrotas continuam salvas)
   ['elo-1700-todas-as-contas', 'UPDATE usuarios SET elo = 1700'],
+  // Depois o dono decidiu: ELO inicial é 0 (todas as contas existentes eram novas)
+  ['elo-0-todas-as-contas', 'UPDATE usuarios SET elo = 0'],
 ];
 
 export async function prepararBanco() {

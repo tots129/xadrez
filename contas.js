@@ -135,11 +135,14 @@ export async function registrarPartida({ branco, preto, vencedor, motivo, lances
   const K = 32;
   const deltaB = K * (placarB - esperadoB);
   const col = (placar) => (placar === 1 ? 'vitorias' : placar === 0 ? 'derrotas' : 'empates');
-  await q(`UPDATE usuarios SET elo = elo + $2, ${col(placarB)} = ${col(placarB)} + 1 WHERE id = $1`, [branco.usuarioId, deltaB]);
-  await q(`UPDATE usuarios SET elo = elo - $2, ${col(1 - placarB)} = ${col(1 - placarB)} + 1 WHERE id = $1`, [preto.usuarioId, deltaB]);
+  // O ELO nunca fica negativo: quem está em 0 e perde continua em 0
+  const novoB = Math.max(0, eb + deltaB);
+  const novoP = Math.max(0, ep - deltaB);
+  await q(`UPDATE usuarios SET elo = $2, ${col(placarB)} = ${col(placarB)} + 1 WHERE id = $1`, [branco.usuarioId, novoB]);
+  await q(`UPDATE usuarios SET elo = $2, ${col(1 - placarB)} = ${col(1 - placarB)} + 1 WHERE id = $1`, [preto.usuarioId, novoP]);
   // Devolve o ELO novo e quanto cada um ganhou/perdeu (arredondado, como aparece na tela)
-  const nb = Math.round(eb + deltaB);
-  const np = Math.round(ep - deltaB);
+  const nb = Math.round(novoB);
+  const np = Math.round(novoP);
   return {
     w: { elo: nb, delta: nb - Math.round(eb) },
     b: { elo: np, delta: np - Math.round(ep) },

@@ -600,15 +600,15 @@ function coordenada(texto, tipo) {
   return s;
 }
 
-/* ---------- Ligas de ELO (todo mundo começa com 1700, na Prata) ---------- */
+/* ---------- Ligas de ELO (todo mundo começa com 0, como Iniciante) ---------- */
 const LIGAS = [
   { min: 0, nome: 'Iniciante', icone: '🪵' },
-  { min: 1400, nome: 'Bronze', icone: '🥉' },
-  { min: 1600, nome: 'Prata', icone: '🥈' },
-  { min: 1800, nome: 'Ouro', icone: '🥇' },
-  { min: 2000, nome: 'Platina', icone: '💠' },
-  { min: 2200, nome: 'Diamante', icone: '💎' },
-  { min: 2400, nome: 'Mestre', icone: '👑' },
+  { min: 100, nome: 'Bronze', icone: '🥉' },
+  { min: 300, nome: 'Prata', icone: '🥈' },
+  { min: 600, nome: 'Ouro', icone: '🥇' },
+  { min: 1000, nome: 'Platina', icone: '💠' },
+  { min: 1500, nome: 'Diamante', icone: '💎' },
+  { min: 2000, nome: 'Mestre', icone: '👑' },
 ];
 const liga = (elo) => [...LIGAS].reverse().find((l) => elo >= l.min) || LIGAS[0];
 const eloTexto = (elo) => `${liga(elo).icone} ${elo}`;
@@ -623,7 +623,7 @@ function nomeDoJogador(cor) {
     const vazio = jogo.history().length || fimExtra ? 'Saiu da sala' : 'Aguardando...';
     const j = nomesOnline[cor];
     const n = (j?.nome || (cor === minhaCor ? eu : vazio)) + (j && !j.conta ? ' (convidado)' : '');
-    const elo = j?.elo ? ` · ${eloTexto(j.elo)}` : '';
+    const elo = j?.conta && j.elo != null ? ` · ${eloTexto(j.elo)}` : '';
     return (cor === minhaCor ? `${n} (você)` : n) + elo;
   }
   if (modo === 'problema') return cor === minhaCor ? eu : 'Defesa';

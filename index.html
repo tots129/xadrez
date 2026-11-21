@@ -6,7 +6,11 @@
   <meta name="theme-color" content="#1b1d2a" />
   <meta name="description" content="Jogue xadrez contra o bot, com um amigo no mesmo aparelho ou online." />
   <title>Xadrez</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♞</text></svg>" />
+  <link rel="icon" href="/icone-192.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icone-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Xadrez" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body data-tema="madeira">
@@ -25,6 +29,7 @@
             <option value="escuro">Escuro</option>
           </select>
         </label>
+        <button id="btn-instalar" class="icone" title="Instalar como app" hidden>📲</button>
         <button id="btn-som" class="icone" title="Desligar sons">🔊</button>
         <button id="btn-ranking" class="icone" title="Ranking">🏆</button>
         <button id="btn-aulas" class="icone" title="Aulas de xadrez">📚</button>
@@ -269,6 +274,25 @@
         <button type="button" id="login-fechar">Cancelar</button>
         <button type="submit" id="login-enviar" class="destaque">Entrar</button>
       </div>
+      <button type="button" id="btn-esqueci" class="link">Esqueci minha senha</button>
+    </form>
+  </div>
+
+  <!-- Escolher senha nova (link do e-mail) -->
+  <div id="redefinir" class="overlay" hidden>
+    <form id="redefinir-form" class="caixa login-caixa">
+      <p>🔑 Escolha sua senha nova</p>
+      <label>Nova senha
+        <input id="redefinir-senha" type="password" maxlength="100" autocomplete="new-password" required />
+      </label>
+      <label>Confirmar senha
+        <input id="redefinir-confirmar" type="password" maxlength="100" autocomplete="new-password" required />
+      </label>
+      <p id="redefinir-erro" class="erro" hidden></p>
+      <div class="dialogo-botoes">
+        <button type="button" id="redefinir-fechar">Cancelar</button>
+        <button type="submit" class="destaque">Salvar senha</button>
+      </div>
     </form>
   </div>
 
@@ -276,6 +300,7 @@
   <div id="perfil" class="overlay" hidden>
     <div class="caixa perfil-caixa">
       <p>👤 <span id="perfil-nome"></span> <small id="perfil-email" class="nota"></small></p>
+      <div id="email-status" class="linha" hidden></div>
       <form id="email-form" class="linha aviso-email" hidden>
         <span class="nota">Sua conta ainda não tem e-mail. Adicione para poder entrar com ele:</span>
         <input id="email-novo" type="text" inputmode="email" maxlength="254" placeholder="seu@email.com" autocomplete="email" />
@@ -514,6 +539,7 @@
         <button type="button" class="aba-admin" data-aba="logins">🔐 Logins</button>
         <button type="button" class="aba-admin" data-aba="salas">♟️ Salas</button>
         <button type="button" class="aba-admin" data-aba="partidas">📜 Partidas</button>
+        <button type="button" class="aba-admin" data-aba="ips">🚫 IPs</button>
       </div>
       <div id="admin-conteudo" class="admin-conteudo"></div>
     </div>

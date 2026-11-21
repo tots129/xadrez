@@ -126,6 +126,21 @@ const ESQUEMA = [
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (usuario_id, codigo)
   )`,
+  // Segurança e moderação
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email_confirmado BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS chat_bloqueado BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE denuncias ADD COLUMN IF NOT EXISTS denunciado_ip TEXT`,
+  `CREATE TABLE IF NOT EXISTS tokens_email (
+    token_hash TEXT PRIMARY KEY,
+    usuario_id INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    tipo TEXT NOT NULL,
+    expira_em TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS ips_banidos (
+    ip TEXT PRIMARY KEY,
+    motivo TEXT,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
   // Avatar escolhido pelo jogador (um emoji da lista)
   `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS avatar TEXT`,
   // Mensagens privadas entre amigos

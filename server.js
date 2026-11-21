@@ -5,7 +5,10 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { Chess } from 'chess.js';
 import { prepararBanco } from './db.js';
-import { rotasDeContas, lerCookie, usuarioDaSessao, registrarPartida, saoAmigos, registrarDenuncia, fecharTemporadas } from './contas.js';
+import {
+  rotasDeContas, lerCookie, usuarioDaSessao, registrarPartida, saoAmigos, registrarDenuncia, fecharTemporadas,
+  silenciados, ipBanido, normalizarIp, carregarModeracao,
+} from './contas.js';
 import { iniciarTorneios } from './torneios.js';
 import { filtrarTexto } from './filtro.js';
 
@@ -15,11 +18,22 @@ app.set('trust proxy', 1); // o Render fica na frente do servidor (HTTPS)
 const server = http.createServer(app);
 const io = new Server(server);
 
+// IP do visitante (o Render passa o IP real no cabeçalho x-forwarded-for)
+const ipDoSocket = (s) => normalizarIp(String(s.handshake.headers['x-forwarded-for'] || '').split(',')[0] || s.handshake.address);
+
+// 🚫 IP banido pelo admin: não entra no site
+app.use((req, res, next) => {
+  if (!ipBanido(req.ip)) return next();
+  res.status(403).type('html').send('<meta charset="utf-8"><body style="font-family:sans-serif;background:#1b1d2a;color:#eee;text-align:center;padding:60px">' +
+    '<h1>🚫 Acesso bloqueado</h1><p>Seu acesso a este site foi bloqueado pelo administrador.</p></body>');
+});
+
 // Quanto tempo esperar um jogador que caiu antes de dar a partida como abandonada
 const ESPERA_RECONEXAO_MS = 60_000;
 
 // Só estes arquivos ficam públicos (o server.js, db.js e contas.js, por exemplo, não).
-const ARQUIVOS_PUBLICOS = ['index.html', 'style.css', 'app.js', 'problemas.js', 'aulas.js'];
+const ARQUIVOS_PUBLICOS = ['index.html', 'style.css', 'app.js', 'problemas.js', 'aulas.js',
+  'manifest.json', 'sw.js', 'icone-192.png', 'icone-512.png', 'icone-mascara-512.png'];
 
 /* ============================================================
    QUEM ESTÁ ONLINE (para a lista de amigos)
@@ -60,6 +74,9 @@ function painel() {
 function desconectar(usuarioId) {
   io.in(`u:${usuarioId}`).disconnectSockets(true);
 }
+function desconectarIp(ip) {
+  for (const s of io.sockets.sockets.values()) if (ipDoSocket(s) === ip) s.disconnect(true);
+}
 
 // Partidas acontecendo agora (para assistir)
 app.get('/api/ao-vivo', (req, res) => {
@@ -83,7 +100,7 @@ app.get('/api/ao-vivo', (req, res) => {
 let torneios = null;
 app.use('/api/torneios', (req, res, next) => (torneios ? torneios.rotas(req, res, next) : res.status(503).json({ erro: 'Iniciando...' })));
 
-app.use('/api', rotasDeContas({ presenca, avisar, painel, desconectar }));
+app.use('/api', rotasDeContas({ presenca, avisar, painel, desconectar, desconectarIp }));
 app.get('/:arquivo', (req, res, next) => {
   if (ARQUIVOS_PUBLICOS.includes(req.params.arquivo)) {
     return res.sendFile(path.join(__dirname, req.params.arquivo));
@@ -320,6 +337,7 @@ function jogadorSaiu(socket, imediato) {
 ============================================================ */
 // Descobre se quem conectou está logado (pelo cookie da sessão)
 io.use(async (socket, next) => {
+  if (ipBanido(ipDoSocket(socket))) return next(new Error('banido'));
   try {
     socket.data.usuario = await usuarioDaSessao(lerCookie(socket.handshake.headers.cookie));
   } catch {
@@ -559,6 +577,9 @@ io.on('connection', (socket) => {
     const texto = String(textoBruto || '').trim().slice(0, 200);
     if (!texto) return;
     const j = sala.jogadores[socket.data.cor];
+    if (j?.usuarioId && silenciados.has(j.usuarioId)) {
+      return socket.emit('aviso-admin', { texto: '🔇 O administrador proibiu sua conta de usar o chat.' });
+    }
     // Guarda as últimas mensagens no servidor: a denúncia usa o texto daqui, não o que o navegador mandar
     sala.mensagens = sala.mensagens || [];
     const msg = {
@@ -566,6 +587,7 @@ io.on('connection', (socket) => {
       cor: socket.data.cor,
       nome: j?.nome || 'Jogador',
       usuarioId: j?.usuarioId || null,
+      ip: ipDoSocket(socket), // para o admin poder banir convidados denunciados
       texto,
     };
     sala.mensagens.push(msg);
@@ -618,6 +640,7 @@ io.on('connection', (socket) => {
         denuncianteNome: eu?.nome || 'Jogador',
         denunciadoId: msg.usuarioId,
         denunciadoNome: msg.nome,
+        denunciadoIp: msg.ip,
         mensagem: msg.texto,
         motivo,
         detalhes,
@@ -658,6 +681,7 @@ torneios = iniciarTorneios({ io, salas, criarSala, apagarSala, avisar });
 const PORTA = process.env.PORT || 3000;
 try {
   await prepararBanco();
+  await carregarModeracao(); // quem está silenciado e IPs banidos
   await torneios.retomar(); // reabre partidas de torneio interrompidas por um reinício
   // Fecha o pódio dos meses que acabaram (e confere de hora em hora)
   const fechar = () => fecharTemporadas().catch((e) => console.error('Erro ao fechar temporada:', e.message));

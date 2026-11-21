@@ -3,6 +3,43 @@ import crypto from 'crypto';
 import express from 'express';
 import { q, bancoAtivo } from './db.js';
 import { filtrarTexto } from './filtro.js';
+import { emailAtivo, enviarEmail, modeloEmail } from './email.js';
+
+/* ---------- Moderação: quem está proibido de falar e IPs banidos (guardados também na memória) ---------- */
+export const silenciados = new Set(); // ids de contas proibidas de usar o chat
+const ipsBanidos = new Set();
+export const normalizarIp = (ip) => String(ip || '').replace(/^::ffff:/, '').trim();
+export const ipBanido = (ip) => ipsBanidos.has(normalizarIp(ip));
+export async function carregarModeracao() {
+  if (!bancoAtivo()) return;
+  for (const r of await q('SELECT id FROM usuarios WHERE chat_bloqueado')) silenciados.add(r.id);
+  for (const r of await q('SELECT ip FROM ips_banidos')) ipsBanidos.add(r.ip);
+}
+
+/* ---------- Links por e-mail (confirmar conta e redefinir senha) ---------- */
+// O endereço do site vem do Render (não do navegador, para ninguém conseguir trocar o link do e-mail)
+const SITE = (process.env.RENDER_EXTERNAL_URL || process.env.SITE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
+const sha256 = (t) => crypto.createHash('sha256').update(t).digest('hex');
+
+async function criarToken(usuarioId, tipo) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await q('DELETE FROM tokens_email WHERE usuario_id = $1 AND tipo = $2', [usuarioId, tipo]);
+  await q(`INSERT INTO tokens_email (token_hash, usuario_id, tipo, expira_em) VALUES ($1, $2, $3, now() + interval '1 hour')`, [sha256(token), usuarioId, tipo]);
+  return token;
+}
+async function usarToken(token, tipo) {
+  const [t] = await q('DELETE FROM tokens_email WHERE token_hash = $1 AND tipo = $2 AND expira_em > now() RETURNING usuario_id',
+    [sha256(String(token || '')), tipo]);
+  return t?.usuario_id || null;
+}
+async function enviarConfirmacao(usuarioId) {
+  if (!emailAtivo()) return false;
+  const [u] = await q('SELECT nome, email, email_confirmado FROM usuarios WHERE id = $1', [usuarioId]);
+  if (!u?.email || u.email_confirmado) return false;
+  const token = await criarToken(usuarioId, 'confirmar');
+  return enviarEmail(u.email, 'Confirme seu e-mail no Xadrez',
+    modeloEmail(`Olá, ${u.nome}!`, 'Clique no botão abaixo para confirmar que este e-mail é seu.', 'Confirmar meu e-mail', `${SITE}/?confirmar=${token}`));
+}
 
 const COOKIE = 'xadrez_sessao';
 const DURACAO_SESSAO_DIAS = 30;
@@ -108,7 +145,7 @@ async function perfil(id) {
   const [u] = await q(
     `SELECT id, nome, email, avatar, round(elo)::int AS elo, vitorias, derrotas, empates,
             bot_vitorias, bot_derrotas, bot_empates, problemas, tema,
-            to_char(problema_dia_data, 'YYYY-MM-DD') AS problema_dia_data, problema_dia_seq
+            to_char(problema_dia_data, 'YYYY-MM-DD') AS problema_dia_data, problema_dia_seq, email_confirmado, chat_bloqueado
      FROM usuarios WHERE id = $1`,
     [id]
   );
@@ -253,10 +290,10 @@ export async function registrarDenuncia(d) {
   if (!bancoAtivo()) throw new Error('Banco de dados não configurado');
   const motivo = MOTIVOS_DENUNCIA.includes(d.motivo) ? d.motivo : 'outro';
   await q(
-    `INSERT INTO denuncias (denunciante_id, denunciante_nome, denunciado_id, denunciado_nome, mensagem, motivo, detalhes, sala)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    `INSERT INTO denuncias (denunciante_id, denunciante_nome, denunciado_id, denunciado_nome, mensagem, motivo, detalhes, sala, denunciado_ip)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [d.denuncianteId, d.denuncianteNome, d.denunciadoId, d.denunciadoNome, d.mensagem, motivo,
-      String(d.detalhes || '').trim().slice(0, 300) || null, d.sala]
+      String(d.detalhes || '').trim().slice(0, 300) || null, d.sala, d.denunciadoIp || null]
   );
 }
 
@@ -268,7 +305,7 @@ export async function saoAmigos(a, b) {
 /* ---------- Rotas ---------- */
 // presenca(id) -> { online, jogando }; avisar(id, evento) -> manda um evento para as abas do usuário
 // painel() -> números e salas ao vivo; desconectar(id) -> derruba as conexões de um usuário
-export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
+export function rotasDeContas({ presenca, avisar, painel, desconectar, desconectarIp }) {
   avisarUsuario = avisar;
   const r = express.Router();
   r.use(express.json({ limit: '20kb' }));
@@ -304,7 +341,53 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
   const precisaLogin = (req, res, next) => (req.usuario ? next() : res.status(401).json({ erro: 'Entre na sua conta primeiro.' }));
 
   r.get('/eu', async (req, res) => {
-    res.json({ contas: true, usuario: req.usuario ? await perfil(req.usuario.id) : null });
+    res.json({ contas: true, emailAtivo: emailAtivo(), usuario: req.usuario ? await perfil(req.usuario.id) : null });
+  });
+
+  /* ---------- Esqueci minha senha / confirmar e-mail ---------- */
+  r.post('/esqueci-senha', async (req, res) => {
+    if (!emailAtivo()) return res.status(503).json({ erro: 'A recuperação por e-mail ainda não está ativada. Peça ao administrador para trocar sua senha.' });
+    const chave = 'esq:' + req.ip;
+    if (bloqueado(chave)) return res.status(429).json({ erro: 'Muitos pedidos. Espere 15 minutos.' });
+    registrarFalha(chave);
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const [u] = await q('SELECT id, nome FROM usuarios WHERE lower(email) = $1 AND NOT bloqueado', [email]);
+    if (u) {
+      const token = await criarToken(u.id, 'senha');
+      await enviarEmail(email, 'Redefinir sua senha no Xadrez',
+        modeloEmail(`Olá, ${u.nome}!`, 'Recebemos um pedido para trocar a senha da sua conta. Clique no botão para escolher uma senha nova.', 'Escolher nova senha', `${SITE}/?redefinir=${token}`));
+      await registrarLogin(req, { usuarioId: u.id, email, sucesso: true, tipo: 'pediu-nova-senha' });
+    }
+    // Mesma resposta exista ou não a conta (para ninguém descobrir quais e-mails estão cadastrados)
+    res.json({ ok: true, texto: 'Se esse e-mail tiver conta, enviamos um link para trocar a senha. Olhe também a caixa de spam.' });
+  });
+
+  r.post('/redefinir-senha', async (req, res) => {
+    const nova = String(req.body?.nova || '');
+    if (nova.length < 6 || nova.length > 100) return res.status(400).json({ erro: 'A senha deve ter pelo menos 6 caracteres.' });
+    const id = await usarToken(req.body?.token, 'senha');
+    if (!id) return res.status(400).json({ erro: 'Esse link é inválido ou já expirou. Peça um novo em "Esqueci minha senha".' });
+    await q('UPDATE usuarios SET senha_hash = $2, email_confirmado = true WHERE id = $1', [id, await gerarHash(nova)]);
+    await q('DELETE FROM sessoes WHERE usuario_id = $1', [id]); // sai de todos os aparelhos
+    await registrarLogin(req, { usuarioId: id, email: '', sucesso: true, tipo: 'redefiniu-senha' });
+    await criarSessao(res, req, id);
+    res.json({ ok: true, usuario: await perfil(id), texto: 'Senha trocada! Você já está dentro da sua conta.' });
+  });
+
+  r.post('/confirmar-email', async (req, res) => {
+    const id = await usarToken(req.body?.token, 'confirmar');
+    if (!id) return res.status(400).json({ erro: 'Esse link de confirmação é inválido ou já expirou.' });
+    await q('UPDATE usuarios SET email_confirmado = true WHERE id = $1', [id]);
+    res.json({ ok: true, texto: 'E-mail confirmado! ✅' });
+  });
+
+  r.post('/reenviar-confirmacao', precisaLogin, async (req, res) => {
+    if (!emailAtivo()) return res.status(503).json({ erro: 'O envio de e-mails ainda não está ativado.' });
+    const chave = 'conf:' + req.usuario.id;
+    if (bloqueado(chave)) return res.status(429).json({ erro: 'Já enviamos vários. Espere um pouco.' });
+    registrarFalha(chave);
+    const ok = await enviarConfirmacao(req.usuario.id);
+    res.json({ ok, texto: ok ? 'Enviamos o link de confirmação para o seu e-mail.' : 'Seu e-mail já está confirmado (ou não foi possível enviar).' });
   });
 
   r.post('/cadastrar', async (req, res) => {
@@ -329,6 +412,7 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     }
     registrarFalha('cad:' + ip); // conta como "tentativa" para limitar criação em massa
     await registrarLogin(req, { usuarioId: novo.id, email, sucesso: true, tipo: 'cadastro' });
+    enviarConfirmacao(novo.id).catch(() => {});
     await criarSessao(res, req, novo.id);
     res.json({ usuario: await perfil(novo.id) });
   });
@@ -379,10 +463,11 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     }
     if ((u.email || '') === email) return res.status(400).json({ erro: 'Esse já é o seu e-mail.' });
     try {
-      await q('UPDATE usuarios SET email = $2 WHERE id = $1', [req.usuario.id, email]);
+      await q('UPDATE usuarios SET email = $2, email_confirmado = false WHERE id = $1', [req.usuario.id, email]);
     } catch {
       return res.status(409).json({ erro: 'Esse e-mail já está em uso em outra conta.' });
     }
+    enviarConfirmacao(req.usuario.id).catch(() => {});
     await registrarLogin(req, { usuarioId: req.usuario.id, email: `${u.email || '(sem e-mail)'} → ${email}`, sucesso: true, tipo: 'troca-email' });
     res.json({ usuario: await perfil(req.usuario.id) });
   });
@@ -550,6 +635,7 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     const para = Number(req.body?.para) || 0;
     const texto = filtrarTexto(String(req.body?.texto || '').trim().slice(0, 500));
     if (!texto) return res.status(400).json({ erro: 'Escreva uma mensagem.' });
+    if (silenciados.has(eu)) return res.status(403).json({ erro: '🔇 O administrador proibiu sua conta de mandar mensagens.' });
     if (!(await saoAmigos(eu, para))) return res.status(403).json({ erro: 'Vocês precisam ser amigos para conversar.' });
     const agora = Date.now();
     const recentes = (ultimasMsgs.get(eu) || []).filter((t) => agora - t < 60_000);
@@ -689,7 +775,7 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     const rows = await q(
       `SELECT u.id, u.nome, u.email, round(u.elo)::int AS elo, u.vitorias, u.derrotas, u.empates,
               u.bot_vitorias, u.bot_derrotas, u.bot_empates, cardinality(u.problemas) AS problemas,
-              u.bloqueado, u.criado_em, u.ultimo_login,
+              u.bloqueado, u.chat_bloqueado, u.email_confirmado, u.criado_em, u.ultimo_login,
               (SELECT count(*)::int FROM amizades a WHERE a.aceita AND (a.de = u.id OR a.para = u.id)) AS amigos
        FROM usuarios u
        WHERE lower(u.nome) LIKE $1 OR lower(coalesce(u.email, '')) LIKE $1
@@ -748,7 +834,7 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
   r.get('/admin/denuncias', soAdmin, async (req, res) => {
     const rows = await q(
       `SELECT d.id, d.denunciante_nome, d.denunciado_id, d.denunciado_nome, d.mensagem, d.motivo, d.detalhes,
-              d.sala, d.estado, d.criado_em, d.resolvido_em, u.bloqueado AS ja_bloqueado, u.email AS denunciado_email,
+              d.sala, d.estado, d.criado_em, d.resolvido_em, d.denunciado_ip, u.bloqueado AS ja_bloqueado, u.email AS denunciado_email,
               (SELECT count(*)::int FROM denuncias x WHERE x.denunciado_id = d.denunciado_id AND d.denunciado_id IS NOT NULL) AS total_contra
        FROM denuncias d LEFT JOIN usuarios u ON u.id = d.denunciado_id
        ORDER BY (d.estado = 'aberta') DESC, d.criado_em DESC LIMIT 200`
@@ -765,6 +851,13 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     if (acao === 'ignorar') {
       await q("UPDATE denuncias SET estado = 'ignorada', resolvido_em = now() WHERE id = $1", [id]);
       return res.json({ ok: true, texto: 'Denúncia ignorada.' });
+    }
+    if (acao === 'banir-ip') {
+      if (!d.denunciado_ip) return res.status(400).json({ erro: 'Não temos o IP dessa pessoa.' });
+      const r2 = await banirIp(req, d.denunciado_ip, `denúncia #${d.id} (${d.denunciado_nome})`);
+      if (r2.erro) return res.status(400).json(r2);
+      await q("UPDATE denuncias SET estado = 'bloqueado', resolvido_em = now() WHERE id = $1", [id]);
+      return res.json({ ok: true, texto: `IP de ${d.denunciado_nome} banido.` });
     }
     if (acao === 'bloquear') {
       if (!d.denunciado_id) return res.status(400).json({ erro: 'Essa pessoa jogou como convidado (sem conta), então não dá para bloquear. Você pode ignorar a denúncia.' });
@@ -793,6 +886,54 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     desconectar(u.id);
     await q('DELETE FROM usuarios WHERE id = $1', [u.id]);
     res.json({ ok: true, texto: `A conta de ${u.nome} foi excluída.` });
+  });
+
+  /* ---------- Admin: silenciar no chat, banir IP, backup ---------- */
+  r.post('/admin/silenciar', soAdmin, async (req, res) => {
+    const u = await alvoDaAcao(req, res);
+    if (!u) return;
+    const silenciar = req.body?.silenciar !== false;
+    await q('UPDATE usuarios SET chat_bloqueado = $2 WHERE id = $1', [u.id, silenciar]);
+    if (silenciar) silenciados.add(u.id);
+    else silenciados.delete(u.id);
+    avisar(u.id, 'aviso-admin', { texto: silenciar ? '🔇 O administrador proibiu você de usar o chat.' : '🔊 Você pode usar o chat de novo.' });
+    res.json({ ok: true, texto: silenciar ? `${u.nome} não pode mais usar o chat.` : `${u.nome} pode usar o chat de novo.` });
+  });
+
+  async function banirIp(req, ipBruto, motivo) {
+    const ip = normalizarIp(ipBruto);
+    if (!ip) return { erro: 'IP inválido.' };
+    if (ip === normalizarIp(req.ip)) return { erro: 'Esse é o SEU IP! Não dá para banir a si mesmo.' };
+    await q('INSERT INTO ips_banidos (ip, motivo) VALUES ($1, $2) ON CONFLICT (ip) DO UPDATE SET motivo = $2', [ip, String(motivo || '').slice(0, 200)]);
+    ipsBanidos.add(ip);
+    desconectarIp(ip);
+    return { ok: true };
+  }
+
+  r.get('/admin/ips', soAdmin, async (req, res) => {
+    res.json(await q('SELECT ip, motivo, criado_em FROM ips_banidos ORDER BY criado_em DESC'));
+  });
+  r.post('/admin/banir-ip', soAdmin, async (req, res) => {
+    const r2 = await banirIp(req, req.body?.ip, req.body?.motivo || 'banido pelo admin');
+    if (r2.erro) return res.status(400).json(r2);
+    res.json({ ok: true, texto: `IP ${normalizarIp(req.body.ip)} banido. A pessoa foi desconectada.` });
+  });
+  r.post('/admin/desbanir-ip', soAdmin, async (req, res) => {
+    const ip = normalizarIp(req.body?.ip);
+    await q('DELETE FROM ips_banidos WHERE ip = $1', [ip]);
+    ipsBanidos.delete(ip);
+    res.json({ ok: true, texto: `IP ${ip} liberado.` });
+  });
+
+  // Cópia de segurança de todo o banco (arquivo .json para guardar no computador)
+  r.get('/admin/backup', soAdmin, async (req, res) => {
+    const tabelas = ['usuarios', 'amizades', 'partidas', 'elo_historico', 'conquistas', 'temporada_premios', 'mensagens',
+      'denuncias', 'torneios', 'torneio_jogadores', 'torneio_partidas', 'ips_banidos', 'logins'];
+    const dados = { gerado_em: new Date().toISOString(), versao: 1 };
+    for (const t of tabelas) dados[t] = await q(`SELECT * FROM ${t}`);
+    const data = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Disposition', `attachment; filename="backup-xadrez-${data}.json"`);
+    res.json(dados);
   });
 
   // Erros inesperados (ex.: banco fora do ar)

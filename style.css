@@ -464,6 +464,14 @@ button.conta-btn { padding: 6px 12px; font-size: 14px; font-weight: 600; max-wid
 .ligas { margin: 4px 0 10px; color: var(--suave); font-size: 13px; line-height: 1.8; }
 .stats small#st-elo-liga { text-align: center; }
 
+/* ---------- Segurança ---------- */
+button.link { background: none; border: 0; padding: 4px; color: #8fb8ff; text-decoration: underline; font-size: 13px; align-self: center; }
+#email-status { align-items: center; margin: -6px 0 8px; }
+#email-status button { padding: 4px 10px; font-size: 13px; }
+.backup { margin-top: 16px; padding: 12px; border-radius: 10px; background: var(--bg2); }
+.admin-conteudo form.linha { margin-bottom: 10px; }
+.admin-conteudo form.linha input { color: var(--texto); }
+
 /* ---------- Social: avatar, mensagens, ao vivo, torneios ---------- */
 #btn-conta { position: relative; }
 #btn-conta[data-badge]:not([data-badge=''])::after {

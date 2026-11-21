@@ -126,6 +126,7 @@ let salaAtual = null;
 let nomesOnline = { w: null, b: null };
 let revancheEnviada = false;
 let assistindo = null;      // código da sala que estou só assistindo
+const silenciadosPorMim = new Set(guardar.ler('xadrez-silenciados', []));
 let salaDeTorneio = null;   // { nome, rodada } quando a partida é de torneio
 
 // Problemas
@@ -171,13 +172,26 @@ const SONS = {
   tic: () => bip(1000, 0.03, 'square', 0.05),
 };
 
+// 📳 Vibração no celular (segue o botão de som: som desligado = sem vibrar)
+function vibrar(padrao) {
+  if (!somLigado || !navigator.vibrate) return;
+  try { navigator.vibrate(padrao); } catch { /* aparelho sem vibração */ }
+}
+
 function somDoUltimoLance() {
   const h = jogo.history({ verbose: true });
   const m = h[h.length - 1];
   if (!m) return;
-  if (jogo.inCheck() && !jogo.isCheckmate()) SONS.xeque();
-  else if (m.captured) SONS.captura();
-  else SONS.lance();
+  if (jogo.inCheck() && !jogo.isCheckmate()) {
+    SONS.xeque();
+    vibrar([70, 50, 70]);
+  } else if (m.captured) {
+    SONS.captura();
+    vibrar(45);
+  } else {
+    SONS.lance();
+    vibrar(20);
+  }
 }
 
 function atualizarBotaoSom() {
@@ -1171,8 +1185,12 @@ function comemorar(vencedor) {
   if (vencedor === null) SONS.empate();
   else if (euVenci) {
     SONS.vitoria();
+    vibrar([60, 40, 60, 40, 160]);
     confete();
-  } else SONS.derrota();
+  } else {
+    SONS.derrota();
+    vibrar(300);
+  }
 }
 
 function atualizarStatus() {
@@ -1734,7 +1752,9 @@ function conectar() {
     atualizarStatus();
   });
 
-  socket.on('chat', ({ id, nome, cor, texto }) => {
+  socket.on('chat', ({ id, nome, cor, texto, usuarioId }) => {
+    const chaveSilencio = usuarioId ? 'u' + usuarioId : 'n' + nome;
+    if (cor !== minhaCor && silenciadosPorMim.has(chaveSilencio)) return; // eu silenciei essa pessoa
     const div = document.createElement('div');
     div.className = 'msg' + (cor === minhaCor ? ' minha' : '');
     const b = document.createElement('b');
@@ -1749,11 +1769,31 @@ function conectar() {
       btn.title = 'Denunciar mensagem';
       btn.textContent = '🚩';
       btn.onclick = () => abrirDenuncia({ id, nome, texto, botao: btn });
-      div.appendChild(btn);
+      // 🔇 Silenciar: esconde as mensagens dessa pessoa (só para mim)
+      const mudo = document.createElement('button');
+      mudo.className = 'denunciar';
+      mudo.title = `Silenciar ${nome}`;
+      mudo.textContent = '🔇';
+      mudo.onclick = () => {
+        silenciadosPorMim.add(chaveSilencio);
+        guardar.salvar('xadrez-silenciados', [...silenciadosPorMim]);
+        [...$('chat-msgs').querySelectorAll('.msg')].forEach((m) => m.dataset.chave === chaveSilencio && m.remove());
+        avisar(`🔇 ${nome} foi silenciado. Você não verá mais as mensagens dessa pessoa.`);
+      };
+      div.dataset.chave = chaveSilencio;
+      div.append(btn, mudo);
     }
     $('chat-msgs').appendChild(div);
     $('chat-msgs').scrollTop = $('chat-msgs').scrollHeight;
     if (cor !== minhaCor) SONS.msg();
+  });
+
+  socket.on('aviso-admin', ({ texto }) => avisar(texto));
+  socket.on('connect_error', (e) => {
+    if (e.message === 'banido') {
+      $('conexao').textContent = '🚫 Seu acesso foi bloqueado pelo administrador.';
+      $('conexao').hidden = false;
+    }
   });
 
   // Só chega para o administrador
@@ -2494,6 +2534,8 @@ async function carregarConta() {
   try {
     const r = await api('/eu');
     $('btn-conta').hidden = !r.contas;
+    emailAtivo = !!r.emailAtivo;
+    $('btn-esqueci').hidden = !emailAtivo;
     await aplicarConta(r.usuario);
     if (conta) conectar();
   } catch {
@@ -2526,6 +2568,60 @@ $('btn-conta').onclick = () => {
   $('login-email').focus();
 };
 $('login-fechar').onclick = () => ($('login').hidden = true);
+
+/* ---------- Esqueci minha senha / confirmar e-mail ---------- */
+let emailAtivo = false;
+$('btn-esqueci').onclick = async () => {
+  const email = $('login-email').value.trim();
+  const erro = (t) => { $('login-erro').textContent = t; $('login-erro').hidden = false; };
+  if (!email) return erro('Digite seu e-mail no campo acima e clique de novo em "Esqueci minha senha".');
+  try {
+    const r = await api('/esqueci-senha', { email });
+    $('login').hidden = true;
+    avisar('📧 ' + r.texto);
+  } catch (err) {
+    erro(err.message);
+  }
+};
+
+let tokenRedefinir = null;
+$('redefinir-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const nova = $('redefinir-senha').value;
+  const erro = (t) => { $('redefinir-erro').textContent = t; $('redefinir-erro').hidden = false; };
+  if (nova !== $('redefinir-confirmar').value) return erro('As senhas não são iguais.');
+  try {
+    const r = await api('/redefinir-senha', { token: tokenRedefinir, nova });
+    $('redefinir').hidden = true;
+    await aplicarConta(r.usuario);
+    renovarConexao();
+    avisar('🔑 ' + r.texto);
+  } catch (err) {
+    erro(err.message);
+  }
+};
+$('redefinir-fechar').onclick = () => ($('redefinir').hidden = true);
+
+// Links que chegam por e-mail: ?redefinir=... e ?confirmar=...
+async function tratarLinksDeEmail() {
+  const p = new URLSearchParams(location.search);
+  const limpar = () => history.replaceState(null, '', location.pathname);
+  if (p.get('redefinir')) {
+    tokenRedefinir = p.get('redefinir');
+    limpar();
+    $('redefinir').hidden = false;
+    $('redefinir-senha').focus();
+  } else if (p.get('confirmar')) {
+    const token = p.get('confirmar');
+    limpar();
+    try {
+      avisar((await api('/confirmar-email', { token })).texto);
+      if (conta) conta.email_confirmado = true;
+    } catch (err) {
+      avisar(err.message);
+    }
+  }
+}
 
 $('login-form').onsubmit = async (e) => {
   e.preventDefault();
@@ -2566,6 +2662,21 @@ async function abrirPerfil() {
   }
   $('perfil-nome').textContent = conta.nome;
   $('perfil-email').textContent = conta.email || '';
+  // Situação do e-mail (confirmado ou não)
+  const st = $('email-status');
+  st.innerHTML = '';
+  st.hidden = !conta.email || !emailAtivo;
+  if (conta.email && emailAtivo) {
+    const s = document.createElement('span');
+    s.className = 'nota';
+    s.textContent = conta.email_confirmado ? '✅ E-mail confirmado' : '⚠️ E-mail ainda não confirmado';
+    st.appendChild(s);
+    if (!conta.email_confirmado) {
+      st.appendChild(botaoAdmin('📧 Reenviar confirmação', async () => {
+        try { avisar((await api('/reenviar-confirmacao', {})).texto); } catch (err) { avisar(err.message); }
+      }));
+    }
+  }
   $('email-form').hidden = !!conta.email;
   $('st-elo').textContent = eloTexto(conta.elo);
   const proxima = LIGAS.find((l) => l.min > conta.elo);
@@ -2832,6 +2943,14 @@ async function carregarAdmin() {
         grade.appendChild(d);
       }
       el.appendChild(grade);
+      // Backup: baixa uma cópia de todo o banco (guarde no seu computador)
+      const backup = document.createElement('div');
+      backup.className = 'backup';
+      const txt = document.createElement('p');
+      txt.className = 'nota';
+      txt.textContent = '💾 Backup: baixa um arquivo com todas as contas, partidas, amigos e conquistas. Guarde no seu computador ou no Google Drive (tem e-mails, então não compartilhe).';
+      backup.append(txt, botaoAdmin('⬇️ Baixar backup agora', () => { location.href = '/api/admin/backup'; }, 'destaque'));
+      el.appendChild(backup);
     } else if (abaAdmin === 'denuncias') {
       const lista = await api('/admin/denuncias');
       mostrarBadge(lista.filter((d) => d.estado === 'aberta').length);
@@ -2847,6 +2966,10 @@ async function carregarAdmin() {
             if (d.denunciado_id && !d.denunciado_admin && !d.ja_bloqueado) {
               acoes.appendChild(botaoAdmin('⛔ Bloquear', () =>
                 acaoAdmin('/admin/denuncias/resolver', { id: d.id, acao: 'bloquear' }, `Bloquear ${d.denunciado_nome}? A pessoa sai na hora e não consegue mais entrar.`), 'perigo'));
+            }
+            if (!d.denunciado_id && d.denunciado_ip) {
+              acoes.appendChild(botaoAdmin('🚫 Banir IP', () =>
+                acaoAdmin('/admin/denuncias/resolver', { id: d.id, acao: 'banir-ip' }, `Banir o IP de ${d.denunciado_nome} (convidado)? Ninguém desse IP vai conseguir entrar no site.`), 'perigo'));
             }
             acoes.appendChild(botaoAdmin('Ignorar', () => acaoAdmin('/admin/denuncias/resolver', { id: d.id, acao: 'ignorar' })));
           } else {
@@ -2882,6 +3005,8 @@ async function carregarAdmin() {
             acoes.append(
               botaoAdmin(u.bloqueado ? 'Desbloquear' : 'Bloquear', () =>
                 acaoAdmin('/admin/bloquear', { id: u.id, bloquear: !u.bloqueado }, u.bloqueado ? null : `Bloquear ${u.nome}? A pessoa sai na hora e não consegue mais entrar.`)),
+              botaoAdmin(u.chat_bloqueado ? '🔊 Liberar chat' : '🔇 Silenciar', () =>
+                acaoAdmin('/admin/silenciar', { id: u.id, silenciar: !u.chat_bloqueado }, u.chat_bloqueado ? null : `Proibir ${u.nome} de usar o chat e as mensagens? A pessoa continua podendo jogar.`)),
               botaoAdmin('Nova senha', async () => {
                 $('admin').hidden = true;
                 const nova = prompt(`Nova senha para ${u.nome} (mínimo 6 caracteres):`);
@@ -2894,19 +3019,37 @@ async function carregarAdmin() {
           } else {
             acoes.textContent = '👑 admin';
           }
-          const status = u.bloqueado ? '⛔ bloqueada' : u.jogando ? '🟡 jogando' : u.online ? '🟢 online' : '⚪ offline';
-          return [u.nome, u.email, status, eloTexto(u.elo), `${u.vitorias}/${u.empates}/${u.derrotas}`,
+          const status = (u.bloqueado ? '⛔ bloqueada' : u.jogando ? '🟡 jogando' : u.online ? '🟢 online' : '⚪ offline') + (u.chat_bloqueado ? ' · 🔇' : '');
+          return [u.nome, (u.email || '') + (u.email_confirmado ? ' ✅' : ''), status, eloTexto(u.elo), `${u.vitorias}/${u.empates}/${u.derrotas}`,
             `${u.bot_vitorias}/${u.bot_empates}/${u.bot_derrotas}`, u.problemas, u.amigos, dataHora(u.criado_em), dataHora(u.ultimo_login), acoes];
         })
       ));
     } else if (abaAdmin === 'logins') {
       const lista = await api('/admin/logins');
-      const TIPOS = { login: 'login', cadastro: 'criou conta', 'troca-email': 'trocou e-mail', 'senha-errada': 'senha errada', 'conta-bloqueada': 'conta bloqueada', 'bloqueado-tentativas': 'muitas tentativas' };
+      const TIPOS = { login: 'login', cadastro: 'criou conta', 'troca-email': 'trocou e-mail', 'senha-errada': 'senha errada', 'conta-bloqueada': 'conta bloqueada',
+        'bloqueado-tentativas': 'muitas tentativas', 'pediu-nova-senha': 'pediu nova senha', 'redefiniu-senha': 'trocou a senha pelo e-mail' };
       el.innerHTML = '';
       el.appendChild(tabela(
-        ['Quando', 'Resultado', 'Conta', 'E-mail digitado', 'IP', 'Navegador'],
-        lista.map((l) => [dataHora(l.quando), (l.sucesso ? '✅ ' : '❌ ') + (TIPOS[l.tipo] || l.tipo), l.nome, l.email, l.ip, l.navegador])
+        ['Quando', 'Resultado', 'Conta', 'E-mail digitado', 'IP', 'Navegador', ''],
+        lista.map((l) => [dataHora(l.quando), (l.sucesso ? '✅ ' : '❌ ') + (TIPOS[l.tipo] || l.tipo), l.nome, l.email, l.ip, l.navegador,
+          l.ip ? botaoAdmin('🚫 Banir IP', () => acaoAdmin('/admin/banir-ip', { ip: l.ip, motivo: `login de ${l.nome || l.email}` },
+            `Banir o IP ${l.ip}? Ninguém desse endereço vai conseguir entrar no site.`), 'perigo') : ''])
       ));
+    } else if (abaAdmin === 'ips') {
+      const lista = await api('/admin/ips');
+      el.innerHTML = '';
+      const form = document.createElement('form');
+      form.className = 'linha';
+      const input = Object.assign(document.createElement('input'), { placeholder: 'IP para banir (ex.: 200.100.50.25)' });
+      const motivo = Object.assign(document.createElement('input'), { placeholder: 'Motivo (opcional)' });
+      form.append(input, motivo, botaoAdmin('🚫 Banir', null, 'perigo'));
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        if (input.value.trim()) acaoAdmin('/admin/banir-ip', { ip: input.value.trim(), motivo: motivo.value });
+      };
+      el.appendChild(form);
+      el.appendChild(tabela(['IP', 'Motivo', 'Desde', ''], lista.map((b) =>
+        [b.ip, b.motivo, dataHora(b.criado_em), botaoAdmin('Liberar', () => acaoAdmin('/admin/desbanir-ip', { ip: b.ip }))])));
     } else if (abaAdmin === 'salas') {
       const lista = await api('/admin/salas');
       const nomeJ = (j) => (j ? `${j.nome}${j.conta ? '' : ' (convidado)'}${j.conectado ? '' : ' ⚠️'}` : '—');
@@ -3270,6 +3413,34 @@ aplicarTema(guardar.ler('xadrez-tema', 'madeira'));
 atualizarBotaoSom();
 mostrar('menu');
 await carregarConta();
+await tratarLinksDeEmail();
+
+/* ---------- 📲 App instalável (PWA) ---------- */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => { /* sem app offline, tudo bem */ });
+}
+let pedidoInstalar = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault(); // guarda o pedido e mostra o nosso botão
+  pedidoInstalar = e;
+  $('btn-instalar').hidden = false;
+});
+$('btn-instalar').onclick = async () => {
+  if (pedidoInstalar) {
+    pedidoInstalar.prompt();
+    const { outcome } = await pedidoInstalar.userChoice;
+    if (outcome === 'accepted') avisar('📲 Instalado! Procure o ícone ♞ na sua tela inicial.');
+    pedidoInstalar = null;
+    $('btn-instalar').hidden = true;
+  }
+};
+window.addEventListener('appinstalled', () => ($('btn-instalar').hidden = true));
+// iPhone não tem o pedido automático: mostra a dica uma vez
+const ehIphone = /iPhone|iPad/.test(navigator.userAgent) && !navigator.standalone;
+if (ehIphone && !guardar.ler('xadrez-dica-iphone', false)) {
+  guardar.salvar('xadrez-dica-iphone', true);
+  setTimeout(() => avisar('📲 Dica: toque em Compartilhar ⬆️ e depois em "Adicionar à Tela de Início" para usar como app.'), 2500);
+}
 
 // Abriu um link de convite (?sala=XXXX) ou recarregou a página no meio de uma partida
 const salaDoLink = new URLSearchParams(location.search).get('sala');

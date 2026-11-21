@@ -464,6 +464,18 @@ button.conta-btn { padding: 6px 12px; font-size: 14px; font-weight: 600; max-wid
 .ligas { margin: 4px 0 10px; color: var(--suave); font-size: 13px; line-height: 1.8; }
 .stats small#st-elo-liga { text-align: center; }
 
+/* ---------- Denúncias ---------- */
+.chat-msgs .msg { display: flex; align-items: baseline; gap: 4px; }
+.chat-msgs .msg b { flex-shrink: 0; }
+.chat-msgs .msg .msg-texto { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+button.denunciar { padding: 0 4px; font-size: 12px; background: transparent; border: 0; opacity: 0.35; }
+.chat-msgs .msg:hover button.denunciar, button.denunciar:focus { opacity: 1; }
+button.denunciar:disabled { opacity: 0.6; filter: grayscale(1); }
+@media (pointer: coarse) { button.denunciar { opacity: 0.7; } }
+.citacao { margin: 0; padding: 8px 12px; border-left: 3px solid #d64545; background: var(--bg2); border-radius: 6px; overflow-wrap: anywhere; }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: #d64545; color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.admin-tabela .msg-denunciada { display: inline-block; max-width: 280px; white-space: normal; overflow-wrap: anywhere; color: #ffd0d0; }
+
 /* ---------- Painel do admin ---------- */
 .admin-caixa { width: min(96vw, 1100px); height: min(90vh, 800px); display: flex; flex-direction: column; text-align: left; padding: 16px; }
 .admin-topo { display: flex; align-items: center; gap: 8px; }

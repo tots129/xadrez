@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { Chess } from 'chess.js';
 import { prepararBanco } from './db.js';
-import { rotasDeContas, lerCookie, usuarioDaSessao, registrarPartida, saoAmigos } from './contas.js';
+import { rotasDeContas, lerCookie, usuarioDaSessao, registrarPartida, saoAmigos, registrarDenuncia } from './contas.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -104,6 +104,7 @@ function registrarNoRanking(sala, codigo, vencedor, motivo) {
 //   base, incremento, tempo: {w, b}, turnoInicio, timerTempo
 // }
 const salas = new Map();
+let contadorMensagens = 0;
 
 function gerarCodigo() {
   let codigo;
@@ -447,7 +448,56 @@ io.on('connection', (socket) => {
     const texto = String(textoBruto || '').trim().slice(0, 200);
     if (!texto) return;
     const j = sala.jogadores[socket.data.cor];
-    io.to(codigo).emit('chat', { nome: j?.nome || 'Jogador', cor: socket.data.cor, texto });
+    // Guarda as últimas mensagens no servidor: a denúncia usa o texto daqui, não o que o navegador mandar
+    sala.mensagens = sala.mensagens || [];
+    const msg = {
+      id: ++contadorMensagens,
+      cor: socket.data.cor,
+      nome: j?.nome || 'Jogador',
+      usuarioId: j?.usuarioId || null,
+      texto,
+    };
+    sala.mensagens.push(msg);
+    if (sala.mensagens.length > 100) sala.mensagens.shift();
+    io.to(codigo).emit('chat', { id: msg.id, nome: msg.nome, cor: msg.cor, texto });
+  });
+
+  // Denunciar uma mensagem do chat
+  let denunciasRecentes = [];
+  const jaDenunciadas = new Set();
+  socket.on('denunciar', async ({ id, motivo, detalhes } = {}, responder) => {
+    const ok = (texto, erro = false) => typeof responder === 'function' && responder({ erro, texto });
+    const sala = salas.get(socket.data.sala);
+    const msg = sala?.mensagens?.find((m) => m.id === Number(id));
+    if (!msg) return ok('Não encontrei essa mensagem.', true);
+    if (msg.cor === socket.data.cor) return ok('Você não pode denunciar a própria mensagem.', true);
+    if (jaDenunciadas.has(msg.id)) return ok('Você já denunciou essa mensagem.', true);
+    const agora = Date.now();
+    denunciasRecentes = denunciasRecentes.filter((t) => agora - t < 10 * 60_000);
+    if (denunciasRecentes.length >= 10) return ok('Muitas denúncias seguidas. Espere um pouco.', true);
+    const eu = sala.jogadores[socket.data.cor];
+    try {
+      await registrarDenuncia({
+        denuncianteId: eu?.usuarioId || null,
+        denuncianteNome: eu?.nome || 'Jogador',
+        denunciadoId: msg.usuarioId,
+        denunciadoNome: msg.nome,
+        mensagem: msg.texto,
+        motivo,
+        detalhes,
+        sala: socket.data.sala,
+      });
+    } catch (e) {
+      console.error('Erro ao salvar denúncia:', e.message);
+      return ok('Não consegui enviar a denúncia agora. Tente de novo.', true);
+    }
+    jaDenunciadas.add(msg.id);
+    denunciasRecentes.push(agora);
+    // Avisa os administradores que estiverem online
+    for (const s of io.sockets.sockets.values()) {
+      if (s.data.usuario?.admin) s.emit('nova-denuncia', { de: eu?.nome, contra: msg.nome });
+    }
+    ok('Denúncia enviada. Obrigado! O administrador vai analisar. 🚩');
   });
 
   socket.on('sair-sala', () => jogadorSaiu(socket, true));

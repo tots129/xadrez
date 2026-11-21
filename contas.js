@@ -146,6 +146,19 @@ export async function registrarPartida({ branco, preto, vencedor, motivo, lances
   };
 }
 
+/* ---------- Denúncias do chat (chamado pelo servidor do jogo) ---------- */
+const MOTIVOS_DENUNCIA = ['ofensa', 'assedio', 'spam', 'trapaca', 'outro'];
+export async function registrarDenuncia(d) {
+  if (!bancoAtivo()) throw new Error('Banco de dados não configurado');
+  const motivo = MOTIVOS_DENUNCIA.includes(d.motivo) ? d.motivo : 'outro';
+  await q(
+    `INSERT INTO denuncias (denunciante_id, denunciante_nome, denunciado_id, denunciado_nome, mensagem, motivo, detalhes, sala)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [d.denuncianteId, d.denuncianteNome, d.denunciadoId, d.denunciadoNome, d.mensagem, motivo,
+      String(d.detalhes || '').trim().slice(0, 300) || null, d.sala]
+  );
+}
+
 export async function saoAmigos(a, b) {
   const r = await q('SELECT 1 FROM amizades WHERE aceita AND ((de = $1 AND para = $2) OR (de = $2 AND para = $1))', [a, b]);
   return r.length > 0;
@@ -428,7 +441,8 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
       (SELECT count(*)::int FROM logins WHERE sucesso AND quando > now() - interval '1 day') AS logins_hoje,
       (SELECT count(*)::int FROM logins WHERE NOT sucesso AND quando > now() - interval '1 day') AS falhas_hoje,
       (SELECT count(*)::int FROM partidas WHERE criado_em > now() - interval '1 day') AS partidas_hoje,
-      (SELECT count(*)::int FROM partidas) AS partidas_total`);
+      (SELECT count(*)::int FROM partidas) AS partidas_total,
+      (SELECT count(*)::int FROM denuncias WHERE estado = 'aberta') AS denuncias_abertas`);
     res.json({ ...n, ...painel() });
   });
 
@@ -475,16 +489,53 @@ export function rotasDeContas({ presenca, avisar, painel, desconectar }) {
     return u;
   }
 
+  async function bloquearConta(id, bloquear) {
+    await q('UPDATE usuarios SET bloqueado = $2 WHERE id = $1', [id, bloquear]);
+    if (bloquear) {
+      await q('DELETE FROM sessoes WHERE usuario_id = $1', [id]);
+      // denúncias abertas contra essa pessoa ficam resolvidas
+      await q("UPDATE denuncias SET estado = 'bloqueado', resolvido_em = now() WHERE denunciado_id = $1 AND estado = 'aberta'", [id]);
+      desconectar(id);
+    }
+  }
+
   r.post('/admin/bloquear', soAdmin, async (req, res) => {
     const u = await alvoDaAcao(req, res);
     if (!u) return;
     const bloquear = req.body?.bloquear !== false;
-    await q('UPDATE usuarios SET bloqueado = $2 WHERE id = $1', [u.id, bloquear]);
-    if (bloquear) {
-      await q('DELETE FROM sessoes WHERE usuario_id = $1', [u.id]);
-      desconectar(u.id);
-    }
+    await bloquearConta(u.id, bloquear);
     res.json({ ok: true, texto: bloquear ? `${u.nome} foi bloqueado.` : `${u.nome} foi desbloqueado.` });
+  });
+
+  r.get('/admin/denuncias', soAdmin, async (req, res) => {
+    const rows = await q(
+      `SELECT d.id, d.denunciante_nome, d.denunciado_id, d.denunciado_nome, d.mensagem, d.motivo, d.detalhes,
+              d.sala, d.estado, d.criado_em, d.resolvido_em, u.bloqueado AS ja_bloqueado, u.email AS denunciado_email,
+              (SELECT count(*)::int FROM denuncias x WHERE x.denunciado_id = d.denunciado_id AND d.denunciado_id IS NOT NULL) AS total_contra
+       FROM denuncias d LEFT JOIN usuarios u ON u.id = d.denunciado_id
+       ORDER BY (d.estado = 'aberta') DESC, d.criado_em DESC LIMIT 200`
+    );
+    res.json(rows.map(({ denunciado_email, ...d }) => ({ ...d, denunciado_admin: ehAdmin(denunciado_email) })));
+  });
+
+  // acao: 'bloquear' (bloqueia a conta denunciada) ou 'ignorar' (arquiva a denúncia)
+  r.post('/admin/denuncias/resolver', soAdmin, async (req, res) => {
+    const id = Number(req.body?.id);
+    const acao = req.body?.acao;
+    const [d] = await q('SELECT d.*, u.email FROM denuncias d LEFT JOIN usuarios u ON u.id = d.denunciado_id WHERE d.id = $1', [id]);
+    if (!d) return res.status(404).json({ erro: 'Denúncia não encontrada.' });
+    if (acao === 'ignorar') {
+      await q("UPDATE denuncias SET estado = 'ignorada', resolvido_em = now() WHERE id = $1", [id]);
+      return res.json({ ok: true, texto: 'Denúncia ignorada.' });
+    }
+    if (acao === 'bloquear') {
+      if (!d.denunciado_id) return res.status(400).json({ erro: 'Essa pessoa jogou como convidado (sem conta), então não dá para bloquear. Você pode ignorar a denúncia.' });
+      if (d.denunciado_id === req.usuario.id || ehAdmin(d.email)) return res.status(400).json({ erro: 'Não dá para bloquear a conta de administrador.' });
+      await bloquearConta(d.denunciado_id, true);
+      await q("UPDATE denuncias SET estado = 'bloqueado', resolvido_em = now() WHERE id = $1", [id]);
+      return res.json({ ok: true, texto: `${d.denunciado_nome} foi bloqueado.` });
+    }
+    res.status(400).json({ erro: 'Ação inválida.' });
   });
 
   r.post('/admin/senha', soAdmin, async (req, res) => {

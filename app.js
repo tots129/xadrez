@@ -1220,11 +1220,18 @@ function conectar() {
   socket = io();
 
   socket.on('connect', () => {
-    $('conexao').hidden = true;
+    $('conexao').hidden = true; // conexão nova (o servidor nunca reconecta sozinho quem ele derrubou)
     if (salaAtual) socket.emit('entrar-sala', { codigo: salaAtual, nome: meuNome(), id: meuId, sessao: minhaSessao });
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', (motivo) => {
+    // O servidor derrubou a conexão de propósito (ex.: conta bloqueada pelo administrador)
+    if (motivo === 'io server disconnect') {
+      $('conexao').textContent = '⛔ Você foi desconectado pelo servidor. Recarregue a página.';
+      $('conexao').hidden = false;
+      return;
+    }
+    $('conexao').textContent = '⚠️ Conexão perdida. Tentando reconectar...';
     if (socket && salaAtual) $('conexao').hidden = false;
   });
 
@@ -1344,15 +1351,34 @@ function conectar() {
     atualizarStatus();
   });
 
-  socket.on('chat', ({ nome, cor, texto }) => {
+  socket.on('chat', ({ id, nome, cor, texto }) => {
     const div = document.createElement('div');
     div.className = 'msg' + (cor === minhaCor ? ' minha' : '');
     const b = document.createElement('b');
     b.textContent = nome + ': ';
-    div.append(b, document.createTextNode(texto));
+    const span = document.createElement('span');
+    span.className = 'msg-texto';
+    span.textContent = texto;
+    div.append(b, span);
+    if (cor !== minhaCor && id) {
+      const btn = document.createElement('button');
+      btn.className = 'denunciar';
+      btn.title = 'Denunciar mensagem';
+      btn.textContent = '🚩';
+      btn.onclick = () => abrirDenuncia({ id, nome, texto, botao: btn });
+      div.appendChild(btn);
+    }
     $('chat-msgs').appendChild(div);
     $('chat-msgs').scrollTop = $('chat-msgs').scrollHeight;
     if (cor !== minhaCor) SONS.msg();
+  });
+
+  // Só chega para o administrador
+  socket.on('nova-denuncia', ({ de, contra }) => {
+    SONS.msg();
+    avisar(`🚩 Nova denúncia: ${de} denunciou ${contra}.`);
+    if (!$('admin').hidden) carregarAdmin();
+    else atualizarBadgeAdmin();
   });
 
   // Fim de partida valendo ELO: mostra quanto ganhou/perdeu
@@ -1431,6 +1457,29 @@ function aplicarFimOnline({ vencedor, motivo }, comemorarAgora) {
   if (comemorarAgora && (wasAtivo || motivo !== 'abandono')) comemorar(vencedor);
 }
 
+// Denúncia de mensagem do chat
+let denunciaAtual = null;
+function abrirDenuncia(d) {
+  denunciaAtual = d;
+  $('denuncia-msg').textContent = `${d.nome}: ${d.texto}`;
+  $('denuncia-form').reset();
+  $('denuncia').hidden = false;
+}
+$('denuncia-cancelar').onclick = () => ($('denuncia').hidden = true);
+$('denuncia-form').onsubmit = (e) => {
+  e.preventDefault();
+  const d = denunciaAtual;
+  $('denuncia').hidden = true;
+  if (!d || !socket) return;
+  socket.emit('denunciar', { id: d.id, motivo: $('denuncia-motivo').value, detalhes: $('denuncia-detalhes').value }, (r) => {
+    avisar(r?.texto || 'Denúncia enviada.');
+    if (r && !r.erro) {
+      d.botao.disabled = true;
+      d.botao.title = 'Denunciada';
+    }
+  });
+};
+
 // Chat
 $('chat-form').onsubmit = (e) => {
   e.preventDefault();
@@ -1500,6 +1549,7 @@ async function aplicarConta(usuario) {
   conta = usuario;
   $('btn-conta').textContent = conta ? `👤 ${conta.nome} · ${eloTexto(conta.elo)}` : '👤 Entrar';
   $('btn-admin').hidden = !conta?.admin;
+  if (conta?.admin) atualizarBadgeAdmin();
   $('apelido').disabled = !!conta;
   $('apelido').parentElement.title = conta ? 'Seu nome é o da sua conta' : '';
   if (!conta) return;
@@ -1837,7 +1887,9 @@ async function carregarAdmin() {
         [r.conexoes, 'pessoas no site agora'], [r.logins_hoje, 'logins (24h)'], [r.falhas_hoje, 'logins errados (24h)'],
         [r.salas.filter((s) => s.estado === 'jogando').length, 'partidas acontecendo'], [r.partidas_hoje, 'partidas (24h)'],
         [r.partidas_total, 'partidas no total'], [r.bloqueadas, 'contas bloqueadas'],
+        [r.denuncias_abertas, 'denúncias para analisar'],
       ];
+      mostrarBadge(r.denuncias_abertas);
       for (const [n, rotulo] of itens) {
         const d = document.createElement('div');
         const b = document.createElement('b');
@@ -1848,6 +1900,33 @@ async function carregarAdmin() {
         grade.appendChild(d);
       }
       el.appendChild(grade);
+    } else if (abaAdmin === 'denuncias') {
+      const lista = await api('/admin/denuncias');
+      mostrarBadge(lista.filter((d) => d.estado === 'aberta').length);
+      const MOT = { ofensa: 'Ofensa', assedio: 'Assédio/ameaça', spam: 'Spam', trapaca: 'Trapaça', outro: 'Outro' };
+      const EST = { aberta: '🔴 aberta', bloqueado: '⛔ bloqueado', ignorada: '⚪ ignorada' };
+      el.innerHTML = '';
+      el.appendChild(tabela(
+        ['Quando', 'Estado', 'Denunciado', 'Mensagem', 'Motivo', 'Detalhes', 'Quem denunciou', 'Ações'],
+        lista.map((d) => {
+          const acoes = document.createElement('div');
+          acoes.className = 'acoes';
+          if (d.estado === 'aberta') {
+            if (d.denunciado_id && !d.denunciado_admin && !d.ja_bloqueado) {
+              acoes.appendChild(botaoAdmin('⛔ Bloquear', () =>
+                acaoAdmin('/admin/denuncias/resolver', { id: d.id, acao: 'bloquear' }, `Bloquear ${d.denunciado_nome}? A pessoa sai na hora e não consegue mais entrar.`), 'perigo'));
+            }
+            acoes.appendChild(botaoAdmin('Ignorar', () => acaoAdmin('/admin/denuncias/resolver', { id: d.id, acao: 'ignorar' })));
+          } else {
+            acoes.textContent = d.resolvido_em ? dataHora(d.resolvido_em) : '';
+          }
+          const quem = d.denunciado_nome + (d.denunciado_id ? '' : ' (convidado)') + (d.total_contra > 1 ? ` · ${d.total_contra} denúncias` : '');
+          const msg = document.createElement('span');
+          msg.className = 'msg-denunciada';
+          msg.textContent = `“${d.mensagem}”`;
+          return [dataHora(d.criado_em), EST[d.estado] || d.estado, quem, msg, MOT[d.motivo] || d.motivo, d.detalhes, d.denunciante_nome, acoes];
+        })
+      ));
     } else if (abaAdmin === 'contas') {
       el.innerHTML = '';
       const busca = document.createElement('input');
@@ -1917,6 +1996,17 @@ async function carregarAdmin() {
   } catch (err) {
     el.textContent = err.message;
   }
+}
+
+// Número de denúncias abertas no botão Admin e na aba
+function mostrarBadge(n) {
+  $('admin-badge').textContent = n;
+  $('admin-badge').hidden = !n;
+  $('btn-admin').textContent = n ? `🛠️ Admin · 🚩${n}` : '🛠️ Admin';
+}
+async function atualizarBadgeAdmin() {
+  if (!conta?.admin) return;
+  try { mostrarBadge((await api('/admin/resumo')).denuncias_abertas); } catch { /* sem badge */ }
 }
 
 document.querySelectorAll('.aba-admin').forEach((b) => (b.onclick = () => {

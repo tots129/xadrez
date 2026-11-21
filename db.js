@@ -54,6 +54,23 @@ const ESQUEMA = [
   `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_login TIMESTAMPTZ`,
   `CREATE UNIQUE INDEX IF NOT EXISTS usuarios_email_idx ON usuarios (lower(email))`,
+  // Todo mundo começa com 1700 de ELO (contas que ainda não jogaram online também sobem para 1700)
+  `ALTER TABLE usuarios ALTER COLUMN elo SET DEFAULT 1700`,
+  `UPDATE usuarios SET elo = 1700 WHERE elo = 1200 AND vitorias + derrotas + empates = 0`,
+  `CREATE TABLE IF NOT EXISTS denuncias (
+    id SERIAL PRIMARY KEY,
+    denunciante_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
+    denunciante_nome TEXT NOT NULL,
+    denunciado_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
+    denunciado_nome TEXT NOT NULL,
+    mensagem TEXT NOT NULL,
+    motivo TEXT NOT NULL,
+    detalhes TEXT,
+    sala TEXT,
+    estado TEXT NOT NULL DEFAULT 'aberta',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolvido_em TIMESTAMPTZ
+  )`,
   `CREATE TABLE IF NOT EXISTS logins (
     id SERIAL PRIMARY KEY,
     usuario_id INT REFERENCES usuarios(id) ON DELETE SET NULL,

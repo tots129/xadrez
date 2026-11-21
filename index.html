@@ -208,7 +208,7 @@
         <thead><tr><th></th><th>Jogador</th><th>ELO</th><th>Partidas</th></tr></thead>
         <tbody id="ranking-lista"></tbody>
       </table>
-      <small class="nota">Todo mundo começa com 1200 de ELO. Ganhar de alguém mais forte dá mais ELO; perder para alguém mais fraco tira mais. Só contam partidas online entre duas contas, com pelo menos 2 lances de cada lado.</small>
+      <small class="nota">Todo mundo começa com 1700 de ELO. Ganhar de alguém mais forte dá mais ELO; perder para alguém mais fraco tira mais. Só contam partidas online entre duas contas, com pelo menos 2 lances de cada lado.</small>
       <div class="ligas" id="ligas"></div>
       <div class="dialogo-botoes"><button id="ranking-fechar">Fechar</button></div>
     </div>
@@ -295,6 +295,30 @@
     </div>
   </div>
 
+  <!-- Denunciar mensagem do chat -->
+  <div id="denuncia" class="overlay" hidden>
+    <form id="denuncia-form" class="caixa login-caixa">
+      <p>🚩 Denunciar mensagem</p>
+      <blockquote id="denuncia-msg" class="citacao"></blockquote>
+      <label>Motivo
+        <select id="denuncia-motivo">
+          <option value="ofensa">Xingamento ou ofensa</option>
+          <option value="assedio">Assédio ou ameaça</option>
+          <option value="spam">Spam ou propaganda</option>
+          <option value="trapaca">Trapaça</option>
+          <option value="outro">Outro</option>
+        </select>
+      </label>
+      <label>Detalhes (opcional)
+        <input id="denuncia-detalhes" maxlength="300" placeholder="Conte o que aconteceu" autocomplete="off" />
+      </label>
+      <div class="dialogo-botoes">
+        <button type="button" id="denuncia-cancelar">Cancelar</button>
+        <button type="submit" class="destaque">Enviar denúncia</button>
+      </div>
+    </form>
+  </div>
+
   <!-- Painel do administrador -->
   <div id="admin" class="overlay" hidden>
     <div class="caixa admin-caixa">
@@ -305,6 +329,7 @@
       </div>
       <div class="abas admin-abas">
         <button type="button" class="aba-admin ativa" data-aba="resumo">📊 Resumo</button>
+        <button type="button" class="aba-admin" data-aba="denuncias">🚩 Denúncias <span id="admin-badge" class="badge" hidden></span></button>
         <button type="button" class="aba-admin" data-aba="contas">👥 Contas</button>
         <button type="button" class="aba-admin" data-aba="logins">🔐 Logins</button>
         <button type="button" class="aba-admin" data-aba="salas">♟️ Salas</button>
